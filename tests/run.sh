@@ -8,9 +8,41 @@ trap 'rm -rf "$TMP"' EXIT
 export MN_FILE="$TMP/MICRONOTE.md"
 export MN_COLOR=0
 export MN_ASCII=1
+export MN_LOCALES_DIR="$ROOT/locales"
+export MN_CONFIG_FILE="$TMP/mn-config"
+export MN_CONFIG_DIR="$TMP"
+# default tests in pt-BR
+export MN_LANG=pt-BR
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { printf 'ok  %s\n' "$*"; }
+
+# ── i18n: missing file message (pt-BR) ──────────────────────────────
+out="$("$MN" show 2>&1 || true)"
+printf '%s\n' "$out" | grep -q 'rode mn init' || fail "pt-BR missing file should say 'rode mn init' (got: $out)"
+printf '%s\n' "$out" | grep -q 'corre ' && fail "should not use pt-PT 'corre'"
+pass "i18n pt-BR no-file message"
+
+# ── i18n: English ───────────────────────────────────────────────────
+out="$(MN_LANG=en "$MN" show 2>&1 || true)"
+printf '%s\n' "$out" | grep -q 'run mn init' || fail "en missing file should say 'run mn init' (got: $out)"
+pass "i18n en no-file message"
+
+# ── i18n: lang command ──────────────────────────────────────────────
+lang_out="$("$MN" lang)"
+printf '%s\n' "$lang_out" | grep -q 'pt-BR' || fail "lang should report pt-BR"
+pass "lang inspect"
+
+MN_LANG= "$MN" lang en >/dev/null
+# config written; unset MN_LANG to use config
+cfg_lang="$(grep '^lang=' "$MN_CONFIG_FILE" | head -1)"
+[[ "$cfg_lang" == "lang=en" ]] || fail "config should be lang=en (got $cfg_lang)"
+out="$(MN_LANG= "$MN" show 2>&1 || true)"
+printf '%s\n' "$out" | grep -q 'run mn init' || fail "config en should apply to show"
+# restore pt-BR for rest of suite
+MN_LANG= "$MN" lang pt-BR >/dev/null
+export MN_LANG=pt-BR
+pass "lang set via config"
 
 # init
 "$MN" init >/dev/null
@@ -43,7 +75,17 @@ out="$("$MN" show)"
 printf '%s\n' "$out" | grep -q "webhooks paddle" || fail "show missing fio"
 printf '%s\n' "$out" | grep -q "npm test" || fail "show missing validar"
 printf '%s\n' "$out" | grep -q "ready" || fail "show missing estado"
+printf '%s\n' "$out" | grep -q "por validar" || fail "pt-BR badge missing"
 pass "show content"
+
+# English aliases
+export MN_LANG=en
+"$MN" thread "english thread" >/dev/null
+grep -A2 '## Fio' "$MN_FILE" | grep -q 'english thread' || fail "en alias thread"
+out="$("$MN" show)"
+printf '%s\n' "$out" | grep -q "to validate" || fail "en badge missing"
+export MN_LANG=pt-BR
+pass "en aliases + badge"
 
 # feito first open
 "$MN" feito >/dev/null
@@ -78,5 +120,12 @@ if printf '%s\n' "$body" | grep -q 'nao tocar'; then
   fail "humano replace kept old"
 fi
 pass "humano --replace"
+
+# blocked badge pt-BR
+"$MN" estado blocked >/dev/null
+out="$("$MN" show)"
+printf '%s\n' "$out" | grep -q "precisa de você" || fail "blocked badge should be pt-BR 'você' not 'ti'"
+printf '%s\n' "$out" | grep -q "precisa de ti" && fail "should not use pt-PT 'ti'"
+pass "blocked badge pt-BR"
 
 printf '\nall tests passed\n'

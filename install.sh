@@ -2,10 +2,11 @@
 # install.sh — install `mn` onto PATH
 #
 # Usage:
-#   ./install.sh                 # copy → ~/.local/bin/mn + ensure PATH
+#   ./install.sh                 # copy → ~/.local/bin/mn + ensure PATH + pick language
 #   ./install.sh --link          # symlink to repo bin (dev)
 #   ./install.sh --prefix DIR    # install to DIR instead of ~/.local/bin
 #   ./install.sh --alias-only    # only add shell alias (no copy; points to repo)
+#   ./install.sh --lang pt-BR|en # language (non-interactive)
 #   ./install.sh --uninstall     # remove binary + PATH/alias blocks we added
 #   ./install.sh --dry-run
 #
@@ -13,11 +14,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 SRC="$ROOT/bin/mn"
+LOCALES_SRC="$ROOT/locales"
 PREFIX="${MN_PREFIX:-$HOME/.local/bin}"
+SHARE_DIR="${MN_SHARE_DIR:-$HOME/.local/share/mn}"
+CONFIG_DIR="${MN_CONFIG_DIR:-$HOME/.config/mn}"
+CONFIG_FILE="$CONFIG_DIR/config"
 MODE="copy"          # copy | link | alias-only
 UNINSTALL=0
 DRY_RUN=0
 FORCE_RC=0           # write rc even if already on PATH
+LANG_ARG="${MN_LANG:-}"  # empty → prompt (if TTY) or detect
 
 MARKER_BEGIN="# >>> micro-notes-cli (mn) >>>"
 MARKER_END="# <<< micro-notes-cli (mn) <<<"
@@ -30,13 +36,17 @@ install.sh — micro-notes-cli (mn)
   ./install.sh --link          symlink ~/.local/bin/mn → repo (updates with git pull)
   ./install.sh --prefix DIR    install directory (default: ~/.local/bin)
   ./install.sh --alias-only    add shell alias mn=.../bin/mn (no install dir)
-  ./install.sh --uninstall     remove binary we installed + rc block
+  ./install.sh --lang pt-BR|en set UI language (skip prompt)
+  ./install.sh --uninstall     remove binary we installed + rc block + config lang
   ./install.sh --force-rc      always (re)write shell rc PATH/alias block
   ./install.sh --dry-run       print actions only
   ./install.sh -h | --help
 
 Env:
-  MN_PREFIX   same as --prefix
+  MN_PREFIX     same as --prefix
+  MN_LANG       same as --lang (pt-BR | en)
+  MN_SHARE_DIR  locales install dir (default: ~/.local/share/mn)
+  MN_CONFIG_DIR config dir (default: ~/.config/mn)
 EOF
 }
 
@@ -53,6 +63,142 @@ run() {
   eval "$@"
 }
 
+normalize_lang() {
+  local raw="${1:-}"
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "$raw" in
+    pt-br|pt|brasil*|brazilian*) printf 'pt-BR\n' ;;
+    en|en-*|english*) printf 'en\n' ;;
+    *) printf '\n' ;;
+  esac
+}
+
+detect_lang_from_env() {
+  local raw="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+  raw="${raw%%.*}"
+  normalize_lang "$raw"
+}
+
+# Interactive language picker. Default pt-BR.
+# CRITICAL: menu/prompts go to stderr (and read from /dev/tty when possible)
+# so `SELECTED="$(pick_language)"` only captures the language code on stdout.
+# Writing prompts to stdout made the install look "hung" and poisoned awk.
+pick_language() {
+  if [[ -n "$LANG_ARG" ]]; then
+    local n
+    n="$(normalize_lang "$LANG_ARG")"
+    [[ -n "$n" ]] || die "invalid --lang / MN_LANG: $LANG_ARG (use pt-BR or en)"
+    printf '%s\n' "$n"
+    return
+  fi
+
+  local default choice n tty_in=0
+  default="$(detect_lang_from_env)"
+  default="${default:-pt-BR}"
+
+  # Prefer a real terminal for the question (works even if stdin is a pipe).
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    tty_in=1
+  elif [[ -t 0 ]]; then
+    tty_in=1
+  else
+    # fully non-interactive (CI / pipes without tty)
+    printf '%s\n' "$default"
+    return
+  fi
+
+  # UI → stderr (visible during command substitution)
+  cat >&2 <<'EOF'
+
+Language / Idioma
+  1) Português (Brasil)  [pt-BR]
+  2) English             [en]
+
+EOF
+  if [[ "$default" == "en" ]]; then
+    printf 'Choose [1/2/pt-BR/en] (default 2): ' >&2
+  else
+    printf 'Escolha [1/2/pt-BR/en] (padrão 1): ' >&2
+  fi
+
+  choice=""
+  if [[ -r /dev/tty ]]; then
+    # read from controlling terminal, not from captured/piped stdin
+    IFS= read -r choice </dev/tty || true
+  else
+    IFS= read -r choice || true
+  fi
+
+  # empty → default
+  if [[ -z "${choice:-}" ]]; then
+    printf '%s\n' "$default"
+    return
+  fi
+
+  # accept 1/2 and language codes (pt-BR, en, …)
+  case "$choice" in
+    1) printf 'pt-BR\n'; return ;;
+    2) printf 'en\n'; return ;;
+  esac
+
+  n="$(normalize_lang "$choice")"
+  if [[ -n "$n" ]]; then
+    printf '%s\n' "$n"
+    return
+  fi
+
+  warn "invalid choice '$choice' — using $default"
+  printf '%s\n' "$default"
+}
+
+write_lang_config() {
+  local lang="$1"
+  # hard guard: never write multi-line / garbage into config
+  case "$lang" in
+    pt-BR|en) ;;
+    *) die "internal: invalid language code for config: ${lang//$'\n'/\\n}" ;;
+  esac
+  info "language: $lang → $CONFIG_FILE"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "[dry-run] write lang=$lang to $CONFIG_FILE"
+    return 0
+  fi
+  mkdir -p "$CONFIG_DIR"
+  # pure bash rewrite — avoid awk -v with special chars
+  local tmp line wrote=0
+  tmp="$(mktemp)"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" == lang=* || "$line" == language=* ]]; then
+        if [[ $wrote -eq 0 ]]; then
+          printf 'lang=%s\n' "$lang"
+          wrote=1
+        fi
+      else
+        printf '%s\n' "$line"
+      fi
+    done <"$CONFIG_FILE" >"$tmp"
+  else
+    : >"$tmp"
+  fi
+  if [[ $wrote -eq 0 ]]; then
+    printf 'lang=%s\n' "$lang" >>"$tmp"
+  fi
+  mv -f "$tmp" "$CONFIG_FILE"
+}
+
+install_locales() {
+  [[ -d "$LOCALES_SRC" ]] || die "missing $LOCALES_SRC"
+  local dest="$SHARE_DIR/locales"
+  info "installing locales → $dest"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "[dry-run] mkdir -p $dest && cp locales/*"
+    return 0
+  fi
+  mkdir -p "$dest"
+  cp -f "$LOCALES_SRC/pt-BR.sh" "$LOCALES_SRC/en.sh" "$dest/"
+}
+
 # ── args ────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -60,6 +206,8 @@ while [[ $# -gt 0 ]]; do
     --alias-only) MODE="alias-only"; shift ;;
     --prefix)     PREFIX="${2:-}"; [[ -n "$PREFIX" ]] || die "--prefix needs DIR"; shift 2 ;;
     --prefix=*)   PREFIX="${1#*=}"; shift ;;
+    --lang)       LANG_ARG="${2:-}"; [[ -n "$LANG_ARG" ]] || die "--lang needs pt-BR|en"; shift 2 ;;
+    --lang=*)     LANG_ARG="${1#*=}"; shift ;;
     --uninstall)  UNINSTALL=1; shift ;;
     --force-rc)   FORCE_RC=1; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
@@ -229,6 +377,21 @@ do_uninstall() {
     log "no binary at $PREFIX/mn"
   fi
 
+  if [[ -d "$SHARE_DIR" ]]; then
+    info "remove share dir $SHARE_DIR"
+    run "rm -rf \"$SHARE_DIR\""
+  fi
+
+  # keep config by default? remove lang file if only lang key — remove whole config dir if ours
+  if [[ -f "$CONFIG_FILE" ]]; then
+    info "remove config $CONFIG_FILE"
+    run "rm -f \"$CONFIG_FILE\""
+    # remove empty config dir
+    if [[ -d "$CONFIG_DIR" ]] && [[ -z "$(ls -A "$CONFIG_DIR" 2>/dev/null || true)" ]]; then
+      run "rmdir \"$CONFIG_DIR\" 2>/dev/null || true"
+    fi
+  fi
+
   local rc
   while IFS= read -r rc; do
     [[ -n "$rc" ]] || continue
@@ -246,6 +409,17 @@ info "micro-notes-cli installer"
 log "repo:   $ROOT"
 log "mode:   $MODE"
 log "prefix: $PREFIX"
+
+# language: prompts on stderr; only the code is captured on stdout
+SELECTED_LANG="$(pick_language)"
+case "$SELECTED_LANG" in
+  pt-BR|en) ;;
+  *) die "failed to resolve language (got: ${SELECTED_LANG//$'\n'/ | })" ;;
+esac
+log "lang:   $SELECTED_LANG"
+
+write_lang_config "$SELECTED_LANG"
+install_locales
 
 if [[ "$MODE" != "alias-only" ]]; then
   run "mkdir -p \"$PREFIX\""
@@ -349,6 +523,7 @@ else
   if [[ -x "$PREFIX/mn" ]]; then
     log "binary:  $PREFIX/mn"
     log "version: $("$PREFIX/mn" --version)"
+    log "lang:    $(MN_LANG= "$PREFIX/mn" lang 2>/dev/null | head -1 || echo "$SELECTED_LANG")"
   else
     die "binary missing after install"
   fi
@@ -363,11 +538,13 @@ fi
 
 cat <<EOF
 
-✓ install complete
+✓ install complete  (lang=$SELECTED_LANG)
 
   Try now:
     hash -r 2>/dev/null; mn --version
-    mn ajuda
+    mn ajuda          # or: mn help
+    mn lang           # show active language
+    mn lang en        # switch later
 
   Or open a new terminal tab.
 
@@ -378,5 +555,5 @@ cat <<EOF
     $ROOT/install.sh --uninstall
 
   Dev (live updates from repo):
-    $ROOT/install.sh --link
+    $ROOT/install.sh --link --lang $SELECTED_LANG
 EOF
