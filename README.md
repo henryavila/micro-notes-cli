@@ -22,14 +22,33 @@ CLI de **microNote** no terminal — card de reentrada humana ao trabalhar com v
 ## Install
 
 ```bash
+cd /Volumes/External/code/micro-notes-cli   # ou o path do repo
 ./install.sh
-# → ~/.local/bin/mn
 ```
 
-Ou:
+O que o installer faz:
+
+1. Copia `bin/mn` → `~/.local/bin/mn` (ou symlink com `--link`)
+2. Se `~/.local/bin` **não** estiver no PATH, acrescenta um bloco marcado no teu shell rc (`.zshrc` / `.bashrc` / fish)
+3. Verifica `mn --version`
 
 ```bash
-cp bin/mn ~/.local/bin/mn && chmod +x ~/.local/bin/mn
+# opções
+./install.sh                 # copy + PATH se preciso
+./install.sh --link          # symlink → repo (dev: git pull actualiza)
+./install.sh --alias-only    # só alias no rc → path do repo (sem ~/.local/bin)
+./install.sh --prefix DIR    # outro destino
+./install.sh --force-rc      # reescreve o bloco no shell rc
+./install.sh --dry-run
+./install.sh --uninstall     # ou: ./uninstall.sh
+```
+
+Depois de instalar (se o PATH foi alterado):
+
+```bash
+source ~/.zshrc    # ou abre um terminal novo
+mn --version
+mn ajuda
 ```
 
 ## Quickstart
