@@ -268,35 +268,35 @@ Sem Node, sem Python no MVP (portátil no PATH do utilizador).
 
 - [x] `git init` em `./micro-notes-cli`  
 - [x] `PLAN.md` com decisões (nome `MICRONOTE.md`, cores, híbrido)  
-- [ ] `README.md` + `LICENSE`  
-- [ ] commit inicial
+- [x] `README.md` + `LICENSE`  
+- [x] commit inicial
 
-### Fase 1 — MVP CLI (usável no Herdr)
+### Fase 1 — MVP CLI (usável no Herdr) ✅
 
-- [ ] `bin/mn`: `init`, `show`, `fio`, `agora`, `validar`, `estado`, `humano`, `fechar`  
-- [ ] `check`, `touch`, `limpar-validar`  
-- [ ] Render com cores + símbolos + `NO_COLOR` / `MN_ASCII`  
-- [ ] Write atómico de secções  
-- [ ] `templates/MICRONOTE.md`  
-- [ ] Testes manuais documentados no README
+- [x] `bin/mn`: `init`, `show`, `fio`, `agora`, `validar`, `estado`, `humano`, `fechar`  
+- [x] `check`, `touch`, `limpar-validar`  
+- [x] Render com cores + símbolos + `NO_COLOR` / `MN_ASCII`  
+- [x] Write atómico de secções  
+- [x] `templates/MICRONOTE.md`  
+- [x] Testes em `tests/run.sh` + README
 
 **Critério de done:** num worktree, `mn init` → `mn fio` → `mn validar` → `mn estado ready` → `mn` mostra card legível em &lt;1s; `mn check` exit 0.
 
-### Fase 2 — Menu, watch, atalhos
+### Fase 2 — Menu, watch, atalhos ✅
 
-- [ ] `mn +` com fzf/select  
-- [ ] `mn watch`  
-- [ ] Atalhos `f a v e h x`  
-- [ ] `mn feito` (marcar checkbox)  
-- [ ] Contagem “N por validar” no header quando `ready`
+- [x] `mn +` com fzf/select  
+- [x] `mn watch`  
+- [x] Atalhos `f a v e h x`  
+- [x] `mn feito` (marcar checkbox)  
+- [x] Contagem “N por validar” no header quando `ready`
 
-### Fase 3 — DX
+### Fase 3 — DX (parcial)
 
-- [ ] Install: copiar para `~/.local/bin` ou script `install.sh`  
+- [x] Install: `install.sh` → `~/.local/bin`  
 - [ ] Completions zsh/bash  
-- [ ] Testes automatizados (bats ou `tests/run.sh`)  
-- [ ] `mn path` (imprime path do ficheiro)  
-- [ ] Highlight especial blocked/ready
+- [x] Testes automatizados `tests/run.sh`  
+- [x] `mn path`  
+- [x] Highlight especial blocked/ready
 
 ### Fase 4 — Opcional
 

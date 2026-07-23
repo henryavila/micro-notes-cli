@@ -1,0 +1,741 @@
+#!/usr/bin/env bash
+# mn — microNote CLI (human re-entry card for multi-agent work)
+# File: MICRONOTE.md (override with MN_FILE)
+set -euo pipefail
+
+MN_VERSION="0.1.0"
+DEFAULT_FILE="MICRONOTE.md"
+PLACEHOLDER_VALIDAR="- [ ] (nada ainda)"
+VALID_ESTADOS="idle|working|blocked|ready"
+
+# ── path ────────────────────────────────────────────────────────────
+note_path() {
+  if [[ -n "${MN_FILE:-}" ]]; then
+    printf '%s\n' "$MN_FILE"
+  else
+    printf '%s\n' "$(pwd)/$DEFAULT_FILE"
+  fi
+}
+
+NOTE="$(note_path)"
+
+# ── color / symbols ─────────────────────────────────────────────────
+use_color() {
+  [[ -t 1 ]] || return 1
+  [[ -z "${NO_COLOR:-}" ]] || return 1
+  [[ "${MN_COLOR:-1}" != "0" ]] || return 1
+  [[ "${MN_ASCII:-0}" != "1" ]] || return 1
+  return 0
+}
+
+if use_color; then
+  C_RESET=$'\033[0m'
+  C_DIM=$'\033[2m'
+  C_BOLD=$'\033[1m'
+  C_RED=$'\033[1;31m'
+  C_GREEN=$'\033[1;32m'
+  C_YELLOW=$'\033[1;33m'
+  C_CYAN=$'\033[1;36m'
+  C_MAGENTA=$'\033[1;35m'
+  C_WHITE=$'\033[1;37m'
+else
+  C_RESET='' C_DIM='' C_BOLD='' C_RED='' C_GREEN=''
+  C_YELLOW='' C_CYAN='' C_MAGENTA='' C_WHITE=''
+fi
+
+if [[ "${MN_ASCII:-0}" == "1" ]]; then
+  SYM_IDLE='[ ]' SYM_WORKING='[.]' SYM_BLOCKED='[!]' SYM_READY='[>]'
+  SYM_FIO='~' SYM_AGORA='>' SYM_VALIDAR='?' SYM_HUMANO='*' SYM_FECHADO='+'
+  SYM_OPEN='[ ]' SYM_DONE='[x]' SYM_BULLET='-'
+else
+  SYM_IDLE='○' SYM_WORKING='◉' SYM_BLOCKED='⛔' SYM_READY='▶'
+  SYM_FIO='💬' SYM_AGORA='→' SYM_VALIDAR='☐' SYM_HUMANO='✎' SYM_FECHADO='✓'
+  SYM_OPEN='☐' SYM_DONE='☑' SYM_BULLET='•'
+fi
+
+# ── time ────────────────────────────────────────────────────────────
+now_hm() { date +%H:%M; }
+
+# ── atomic write ────────────────────────────────────────────────────
+atomic_write() {
+  local content="$1"
+  local dir tmp
+  dir="$(dirname "$NOTE")"
+  mkdir -p "$dir"
+  tmp="$(mktemp "${dir}/.micronote.XXXXXX")"
+  {
+    printf '%s' "$content"
+    case "$content" in
+      *$'\n') ;;
+      *) printf '\n' ;;
+    esac
+  } >"$tmp"
+  mv -f "$tmp" "$NOTE"
+}
+
+# ── ensure file exists for read commands that need it ───────────────
+require_note() {
+  if [[ ! -f "$NOTE" ]]; then
+    printf '%s\n' "mn: ficheiro em falta: $NOTE" >&2
+    printf '%s\n' "    corre: mn init" >&2
+    exit 1
+  fi
+}
+
+# ── template ────────────────────────────────────────────────────────
+template_body() {
+  local t
+  t="$(now_hm)"
+  cat <<EOF
+# microNote
+atualizado: $t
+estado: idle
+
+## Fio
+
+
+## Agora
+
+
+## Validar
+$PLACEHOLDER_VALIDAR
+
+## Humano
+
+
+## Fechado
+- 
+EOF
+}
+
+cmd_init() {
+  if [[ -f "$NOTE" ]]; then
+    printf '%s\n' "mn: já existe $NOTE"
+    return 0
+  fi
+  atomic_write "$(template_body)"
+  printf '%s\n' "mn: criado $NOTE"
+}
+
+# ── meta: atualizado / estado ───────────────────────────────────────
+get_meta() {
+  # prints: atualizado\nestado
+  local a="" e=""
+  [[ -f "$NOTE" ]] || { printf '\n\n'; return; }
+  a="$(grep -E '^atualizado:' "$NOTE" | head -1 | sed 's/^atualizado:[[:space:]]*//')" || true
+  e="$(grep -E '^estado:' "$NOTE" | head -1 | sed 's/^estado:[[:space:]]*//')" || true
+  printf '%s\n%s\n' "${a:-}" "${e:-}"
+}
+
+set_meta() {
+  # set_meta atualizado|estado value
+  local key="$1" val="$2"
+  require_note
+  local content
+  content="$(cat "$NOTE")"
+  if printf '%s\n' "$content" | grep -qE "^${key}:"; then
+    content="$(printf '%s\n' "$content" | sed -E "s/^${key}:.*/${key}: ${val}/")"
+  else
+    # insert after # microNote
+    content="$(printf '%s\n' "$content" | sed -E "s/^(# microNote)$/\1\n${key}: ${val}/")"
+  fi
+  atomic_write "$content"
+}
+
+touch_time() { set_meta atualizado "$(now_hm)"; }
+
+# ── section extract / replace ───────────────────────────────────────
+# Sections: Fio, Agora, Validar, Humano, Fechado
+
+extract_section() {
+  local name="$1"
+  require_note
+  awk -v sec="$name" '
+    BEGIN { p=0 }
+    /^## / {
+      if ($0 == "## " sec) { p=1; next }
+      else if (p) { exit }
+    }
+    p { print }
+  ' "$NOTE"
+}
+
+# body without trailing empty lines for "is empty?" checks
+section_body_trimmed() {
+  extract_section "$1" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' | sed -e 's/[[:space:]]*$//' | sed -e '/./,$!d'
+}
+
+replace_section() {
+  local name="$1"
+  local new_body="$2" # may be multi-line; no trailing ##
+  require_note
+  local content out in_sec=0
+  content="$(cat "$NOTE")"
+  out=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "## $name" ]]; then
+      out+="## $name"$'\n'
+      out+="$new_body"
+      case "$new_body" in
+        *$'\n'|'') ;;
+        *) out+=$'\n' ;;
+      esac
+      out+=$'\n'
+      in_sec=1
+      continue
+    fi
+    if [[ $in_sec -eq 1 ]]; then
+      if [[ "$line" == "## "* ]]; then
+        in_sec=0
+        out+="$line"$'\n'
+      fi
+      # skip old section lines
+      continue
+    fi
+    out+="$line"$'\n'
+  done <<<"$content"
+
+  # if section was missing, append
+  if ! printf '%s\n' "$content" | grep -qx "## $name"; then
+    out+="## $name"$'\n'
+    out+="$new_body"
+    case "$new_body" in
+      *$'\n'|'') ;;
+      *) out+=$'\n' ;;
+    esac
+    out+=$'\n'
+  fi
+
+  atomic_write "$out"
+  touch_time
+}
+
+append_section_line() {
+  local name="$1"
+  local line="$2"
+  local body
+  body="$(extract_section "$name")"
+  # drop pure empty trailing
+  body="$(printf '%s' "$body" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+  if [[ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]]; then
+    body="$line"
+  else
+    body+=$'\n'"$line"
+  fi
+  # for Validar: remove placeholder if adding real item
+  if [[ "$name" == "Validar" ]]; then
+    body="$(printf '%s\n' "$body" | grep -vF -- "$PLACEHOLDER_VALIDAR" || true)"
+    # ensure we still have content
+    [[ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]] && body="$line"
+  fi
+  # for Fechado: remove lone "- " empty bullet
+  if [[ "$name" == "Fechado" ]]; then
+    body="$(printf '%s\n' "$body" | grep -vE '^-[[:space:]]*$' || true)"
+    [[ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]] && body="$line"
+  fi
+  replace_section "$name" "$body"
+}
+
+# ── commands: write ─────────────────────────────────────────────────
+cmd_fio() {
+  local text="$*"
+  [[ -n "$text" ]] || { printf '%s\n' "uso: mn fio <texto>" >&2; exit 2; }
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  replace_section "Fio" "$text"
+  cmd_show
+}
+
+cmd_agora() {
+  local text="$*"
+  [[ -n "$text" ]] || { printf '%s\n' "uso: mn agora <texto>" >&2; exit 2; }
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  replace_section "Agora" "$text"
+  cmd_show
+}
+
+cmd_validar() {
+  local text="$*"
+  [[ -n "$text" ]] || { printf '%s\n' "uso: mn validar <texto>" >&2; exit 2; }
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  append_section_line "Validar" "- [ ] $text"
+  cmd_show
+}
+
+cmd_estado() {
+  local val="${1:-}"
+  [[ -n "$val" ]] || { printf '%s\n' "uso: mn estado <idle|working|blocked|ready>" >&2; exit 2; }
+  if ! [[ "$val" =~ ^($VALID_ESTADOS)$ ]]; then
+    printf '%s\n' "mn: estado inválido: $val (use idle|working|blocked|ready)" >&2
+    exit 2
+  fi
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  set_meta estado "$val"
+  touch_time
+  cmd_show
+}
+
+cmd_humano() {
+  local text="$*"
+  local replace=0
+  if [[ "${1:-}" == "--replace" ]]; then
+    replace=1
+    shift
+    text="$*"
+  fi
+  [[ -n "$text" ]] || { printf '%s\n' "uso: mn humano [--replace] <texto>" >&2; exit 2; }
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  if [[ $replace -eq 1 ]]; then
+    replace_section "Humano" "$text"
+  else
+    append_section_line "Humano" "$text"
+  fi
+  cmd_show
+}
+
+cmd_fechar() {
+  local text="$*"
+  [[ -n "$text" ]] || { printf '%s\n' "uso: mn fechar <texto>" >&2; exit 2; }
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  append_section_line "Fechado" "- $text"
+  cmd_show
+}
+
+cmd_limpar_validar() {
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  replace_section "Validar" "$PLACEHOLDER_VALIDAR"
+  cmd_show
+}
+
+cmd_touch() {
+  require_note
+  touch_time
+  cmd_show
+}
+
+cmd_feito() {
+  require_note
+  local arg="${*:-}"
+  local body new_body
+  body="$(extract_section "Validar")"
+  if [[ -z "$arg" ]]; then
+    # mark first open checkbox
+    new_body="$(printf '%s\n' "$body" | awk '
+      !done && /^- \[ \] / { sub(/^- \[ \] /, "- [x] "); done=1 }
+      { print }
+    ')"
+  elif [[ "$arg" =~ ^[0-9]+$ ]]; then
+    local n="$arg"
+    new_body="$(printf '%s\n' "$body" | awk -v n="$n" '
+      /^- \[[ xX]\] / { i++ }
+      i==n && /^- \[ \] / { sub(/^- \[ \] /, "- [x] ") }
+      { print }
+    ')"
+  else
+    new_body="$(printf '%s\n' "$body" | awk -v t="$arg" '
+      !done && /^- \[ \] / && index($0, t) {
+        sub(/^- \[ \] /, "- [x] "); done=1
+      }
+      { print }
+    ')"
+  fi
+  replace_section "Validar" "$(printf '%s\n' "$new_body" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+  cmd_show
+}
+
+# ── check ───────────────────────────────────────────────────────────
+cmd_check() {
+  local errs=0
+  if [[ ! -f "$NOTE" ]]; then
+    printf '%s\n' "fail: ficheiro em falta ($NOTE) — mn init"
+    exit 1
+  fi
+
+  local meta atualizado estado
+  meta="$(get_meta)"
+  atualizado="$(printf '%s\n' "$meta" | sed -n '1p')"
+  estado="$(printf '%s\n' "$meta" | sed -n '2p')"
+
+  for h in Fio Agora Validar Humano Fechado; do
+    if ! grep -qx "## $h" "$NOTE"; then
+      printf '%s\n' "fail: falta heading ## $h"
+      errs=1
+    fi
+  done
+
+  if [[ -z "$estado" ]]; then
+    printf '%s\n' "fail: estado vazio"
+    errs=1
+  elif ! [[ "$estado" =~ ^($VALID_ESTADOS)$ ]]; then
+    printf '%s\n' "fail: estado inválido: $estado"
+    errs=1
+  fi
+
+  local fio
+  fio="$(extract_section "Fio" | tr -d '[:space:]')"
+  if [[ -z "$fio" ]]; then
+    printf '%s\n' "fail: Fio vazio"
+    errs=1
+  fi
+
+  local val_body open_items has_placeholder
+  val_body="$(extract_section "Validar")"
+  has_placeholder=0
+  printf '%s\n' "$val_body" | grep -qF -- "$PLACEHOLDER_VALIDAR" && has_placeholder=1
+  open_items="$(printf '%s\n' "$val_body" | grep -cE -- '^- \[[ xX]\] ' || true)"
+  if [[ "$has_placeholder" -eq 0 && "$open_items" -eq 0 ]]; then
+    # allow only empty-ish if placeholder present; else fail
+    if [[ -z "$(printf '%s' "$val_body" | tr -d '[:space:]')" ]]; then
+      printf '%s\n' "fail: Validar vazio — adiciona item ou: - [ ] (nada ainda)"
+      errs=1
+    else
+      printf '%s\n' "fail: Validar sem checkboxes — usa mn validar \"…\" ou placeholder"
+      errs=1
+    fi
+  fi
+
+  if [[ $errs -ne 0 ]]; then
+    exit 1
+  fi
+  printf '%s\n' "ok"
+}
+
+# ── show ────────────────────────────────────────────────────────────
+count_open_validar() {
+  extract_section "Validar" 2>/dev/null | grep -cE -- '^- \[ \] ' || true
+}
+
+cmd_show() {
+  if [[ ! -f "$NOTE" ]]; then
+    printf '%s\n' "${C_DIM}mn: sem MICRONOTE — corre mn init${C_RESET}"
+    return 0
+  fi
+
+  local meta atualizado estado
+  meta="$(get_meta)"
+  atualizado="$(printf '%s\n' "$meta" | sed -n '1p')"
+  estado="$(printf '%s\n' "$meta" | sed -n '2p')"
+  [[ -z "$estado" ]] && estado="?"
+
+  local sym color open_n badge=""
+  case "$estado" in
+    idle)    sym="$SYM_IDLE";    color="$C_DIM" ;;
+    working) sym="$SYM_WORKING"; color="$C_YELLOW" ;;
+    blocked) sym="$SYM_BLOCKED"; color="$C_RED" ;;
+    ready)   sym="$SYM_READY";   color="$C_GREEN" ;;
+    *)       sym="?";            color="$C_DIM" ;;
+  esac
+
+  open_n="$(count_open_validar)"
+  if [[ "$estado" == "ready" && "$open_n" -gt 0 ]]; then
+    badge="  ${C_GREEN}${open_n} por validar${C_RESET}"
+  elif [[ "$estado" == "blocked" ]]; then
+    badge="  ${C_RED}precisa de ti${C_RESET}"
+  fi
+
+  local short_path
+  short_path="$(basename "$(dirname "$NOTE")")/$(basename "$NOTE")"
+
+  printf '\n'
+  printf '  %s%s %s%s  %s·%s  %s  %s·%s  %s%s%s\n' \
+    "$color" "$sym" "$estado" "$C_RESET" \
+    "$C_DIM" "$C_RESET" \
+    "${atualizado:---}" \
+    "$C_DIM" "$C_RESET" \
+    "$C_DIM" "$short_path" "$C_RESET"
+  printf '%s\n' "$badge"
+  printf '\n'
+
+  # Fio
+  printf '  %s%s Fio%s\n' "$C_CYAN" "$SYM_FIO" "$C_RESET"
+  _print_section_body "Fio" "     "
+
+  # Agora
+  printf '  %s%s Agora%s\n' "$C_WHITE" "$SYM_AGORA" "$C_RESET"
+  _print_section_body "Agora" "     "
+
+  # Validar — highlight if ready/blocked
+  local vcolor="$C_GREEN"
+  [[ "$estado" == "ready" || "$estado" == "blocked" ]] && vcolor="$C_BOLD$C_GREEN"
+  printf '  %s%s Validar%s\n' "$vcolor" "$SYM_VALIDAR" "$C_RESET"
+  _print_validar
+
+  # Humano
+  printf '  %s%s Humano%s\n' "$C_MAGENTA" "$SYM_HUMANO" "$C_RESET"
+  _print_section_body "Humano" "     "
+
+  # Fechado
+  printf '  %s%s Fechado%s\n' "$C_DIM" "$SYM_FECHADO" "$C_RESET"
+  _print_fechado
+
+  printf '\n'
+}
+
+_print_section_body() {
+  local name="$1" indent="$2"
+  local body line empty=1
+  body="$(extract_section "$name" 2>/dev/null || true)"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
+    empty=0
+    printf '%s%s\n' "$indent" "$line"
+  done <<<"$body"
+  if [[ $empty -eq 1 ]]; then
+    printf '%s%s(vazio)%s\n' "$indent" "$C_DIM" "$C_RESET"
+  fi
+}
+
+_print_validar() {
+  local body line empty=1 t
+  body="$(extract_section "Validar" 2>/dev/null || true)"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
+    empty=0
+    if [[ "$line" == "- [x] "* || "$line" == "- [X] "* ]]; then
+      t="$(printf '%s\n' "$line" | sed -E 's/^- \[[xX]\] //')"
+      printf '     %s%s  %s%s\n' "$C_DIM" "$SYM_DONE" "$t" "$C_RESET"
+    elif [[ "$line" == "- [ ] "* ]]; then
+      t="$(printf '%s\n' "$line" | sed -E 's/^- \[ \] //')"
+      if [[ "$t" == "(nada ainda)" ]]; then
+        printf '     %s%s  %s%s\n' "$C_DIM" "$SYM_OPEN" "$t" "$C_RESET"
+      else
+        printf '     %s%s  %s%s\n' "$C_GREEN" "$SYM_OPEN" "$t" "$C_RESET"
+      fi
+    else
+      printf '     %s\n' "$line"
+    fi
+  done <<<"$body"
+  if [[ $empty -eq 1 ]]; then
+    printf '     %s(vazio)%s\n' "$C_DIM" "$C_RESET"
+  fi
+}
+
+_print_fechado() {
+  local body line empty=1
+  body="$(extract_section "Fechado" 2>/dev/null || true)"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
+    [[ "$line" =~ ^-[[:space:]]*$ ]] && continue
+    empty=0
+    if [[ "$line" == "- "* ]]; then
+      printf '     %s%s %s%s\n' "$C_DIM" "$SYM_BULLET" "${line#- }" "$C_RESET"
+    else
+      printf '     %s%s%s\n' "$C_DIM" "$line" "$C_RESET"
+    fi
+  done <<<"$body"
+  if [[ $empty -eq 1 ]]; then
+    printf '     %s—%s\n' "$C_DIM" "$C_RESET"
+  fi
+}
+
+# ── watch ───────────────────────────────────────────────────────────
+cmd_watch() {
+  local interval="${MN_WATCH_INTERVAL:-1}"
+  # allow: mn watch 2
+  if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+    interval="$1"
+  fi
+  while true; do
+    if command -v clear >/dev/null 2>&1; then
+      clear
+    else
+      printf '\033[2J\033[H'
+    fi
+    printf '%s mn watch · %ss · Ctrl+C para sair%s\n' "$C_DIM" "$interval" "$C_RESET"
+    cmd_show || true
+    sleep "$interval"
+  done
+}
+
+# ── path ────────────────────────────────────────────────────────────
+cmd_path() {
+  printf '%s\n' "$NOTE"
+}
+
+# ── help ────────────────────────────────────────────────────────────
+cmd_ajuda() {
+  cat <<EOF
+mn v${MN_VERSION} — microNote (card de reentrada humana)
+
+Ficheiro: ${DEFAULT_FILE}  (override: MN_FILE)
+Path:     $(note_path)
+
+Leitura
+  mn              ver card (cores + símbolos)
+  mn show         idem
+  mn watch [n]    refresh a cada n segundos (default 1)
+  mn path         imprime path do ficheiro
+  mn check        valida estrutura (exit 0/1)
+  mn ajuda        esta ajuda
+
+Escrita
+  mn init
+  mn fio <texto>
+  mn agora <texto>
+  mn validar <texto>
+  mn estado <idle|working|blocked|ready>
+  mn humano [--replace] <texto>
+  mn fechar <texto>
+  mn feito [n|texto]   marca item Validar como feito
+  mn limpar-validar
+  mn touch             só actualiza hora
+  mn +                 menu interactivo
+
+Atalhos
+  f→fio  a→agora  v→validar  e→estado  h→humano  x→fechar
+
+Env
+  MN_FILE  MN_COLOR=0  NO_COLOR  MN_ASCII=1  MN_WATCH_INTERVAL
+
+Herdr: pane lateral →  mn watch
+EOF
+}
+
+# ── menu + ──────────────────────────────────────────────────────────
+cmd_menu() {
+  local options=(
+    "validar — o que eu verifico"
+    "fio — do que falámos"
+    "agora — o que está a acontecer"
+    "estado — idle/working/blocked/ready"
+    "humano — nota minha"
+    "fechar — decisão fechada"
+    "feito — marcar validar"
+    "ver card"
+    "check"
+    "cancelar"
+  )
+
+  local choice=""
+  if command -v fzf >/dev/null 2>&1 && [[ -t 0 ]]; then
+    choice="$(printf '%s\n' "${options[@]}" | fzf --prompt='mn › ' --height=40% --reverse || true)"
+  else
+    printf '%s\n' "mn +  (menu)"
+    local i=1
+    for o in "${options[@]}"; do
+      printf '  %d) %s\n' "$i" "$o"
+      i=$((i + 1))
+    done
+    printf 'escolha [1-%d]: ' "${#options[@]}"
+    local n
+    read -r n || true
+    if [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#options[@]} )); then
+      choice="${options[$((n - 1))]}"
+    fi
+  fi
+
+  [[ -z "$choice" || "$choice" == cancelar* ]] && return 0
+
+  local text=""
+  case "$choice" in
+    validar*)
+      printf 'validar: '
+      read -r text
+      [[ -n "$text" ]] && cmd_validar "$text"
+      ;;
+    fio*)
+      printf 'fio: '
+      read -r text
+      [[ -n "$text" ]] && cmd_fio "$text"
+      ;;
+    agora*)
+      printf 'agora: '
+      read -r text
+      [[ -n "$text" ]] && cmd_agora "$text"
+      ;;
+    estado*)
+      local est
+      if command -v fzf >/dev/null 2>&1 && [[ -t 0 ]]; then
+        est="$(printf '%s\n' idle working blocked ready | fzf --prompt='estado › ' --height=20% --reverse || true)"
+      else
+        printf 'estado (idle|working|blocked|ready): '
+        read -r est
+      fi
+      [[ -n "$est" ]] && cmd_estado "$est"
+      ;;
+    humano*)
+      printf 'humano: '
+      read -r text
+      [[ -n "$text" ]] && cmd_humano "$text"
+      ;;
+    fechar*)
+      printf 'fechar: '
+      read -r text
+      [[ -n "$text" ]] && cmd_fechar "$text"
+      ;;
+    feito*)
+      printf 'feito (n ou texto, vazio=primeiro): '
+      read -r text
+      cmd_feito $text
+      ;;
+    ver*)
+      cmd_show
+      ;;
+    check*)
+      cmd_check
+      ;;
+  esac
+}
+
+# ── dispatch ────────────────────────────────────────────────────────
+usage_exit() {
+  cmd_ajuda
+  exit 2
+}
+
+main() {
+  local cmd="${1:-}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+
+  # flags as commands
+  case "$cmd" in
+    --watch) cmd="watch" ;;
+    --help|-h) cmd="ajuda" ;;
+    --version|-V) printf '%s\n' "$MN_VERSION"; exit 0 ;;
+    --path) cmd="path" ;;
+  esac
+
+  # empty → show
+  if [[ -z "$cmd" ]]; then
+    cmd_show
+    return
+  fi
+
+  # shortcuts
+  case "$cmd" in
+    f) cmd="fio" ;;
+    a) cmd="agora" ;;
+    v) cmd="validar" ;;
+    e) cmd="estado" ;;
+    h) cmd="humano" ;;
+    x) cmd="fechar" ;;
+    +) cmd="menu" ;;
+  esac
+
+  case "$cmd" in
+    init)            cmd_init ;;
+    show)            cmd_show ;;
+    watch)           cmd_watch "$@" ;;
+    path)            cmd_path ;;
+    check)           cmd_check ;;
+    ajuda|help)      cmd_ajuda ;;
+    fio)             cmd_fio "$@" ;;
+    agora)           cmd_agora "$@" ;;
+    validar)         cmd_validar "$@" ;;
+    estado)          cmd_estado "$@" ;;
+    humano)          cmd_humano "$@" ;;
+    fechar)          cmd_fechar "$@" ;;
+    feito)           cmd_feito "$@" ;;
+    limpar-validar)  cmd_limpar_validar ;;
+    touch)           cmd_touch ;;
+    menu)            cmd_menu ;;
+    *)
+      printf '%s\n' "mn: comando desconhecido: $cmd" >&2
+      printf '%s\n' "    mn ajuda" >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"
