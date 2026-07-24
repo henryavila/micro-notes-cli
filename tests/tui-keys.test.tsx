@@ -78,15 +78,37 @@ describe('TUI keys write the note file', () => {
     }
   });
 
-  it('s + j + enter sets status working on disk', async () => {
+  it('s + j×5 + enter sets status coding on disk (ai-dev pack)', async () => {
     const { stdin, lastFrame, unmount } = render(<App />);
     try {
       await new Promise((r) => setTimeout(r, 60));
-      // j moves focus in status mode (same as downArrow)
-      await typeKeys(stdin, ['s', 'j', '\r'], 40);
-      await waitFor(() => parseNote(readFileSync(path, 'utf8')).status === 'working');
-      expect(parseNote(readFileSync(path, 'utf8')).status).toBe('working');
-      expect(lastFrame() ?? '').toMatch(/working/i);
+      // order: idle, designing, await-design, planning, review-plan, coding(5)
+      await typeKeys(stdin, ['s', 'j', 'j', 'j', 'j', 'j', '\r'], 35);
+      await waitFor(() => parseNote(readFileSync(path, 'utf8')).status === 'coding');
+      expect(parseNote(readFileSync(path, 'utf8')).status).toBe('coding');
+      expect(lastFrame() ?? '').toMatch(/coding/i);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('s → blocked opens wait input; enter saves reason on disk', async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      // blocked is index 7 in ai-dev order → 7× j
+      await typeKeys(stdin, ['s', 'j', 'j', 'j', 'j', 'j', 'j', 'j', '\r'], 30);
+      await waitFor(() => /blocked on/i.test(lastFrame() ?? ''));
+      await typeKeys(stdin, 'cutover vs dual-write'.split(''), 15);
+      await typeKeys(stdin, ['\r'], 40);
+      await waitFor(() => {
+        const n = parseNote(readFileSync(path, 'utf8'));
+        return n.status === 'blocked' && n.wait === 'cutover vs dual-write';
+      });
+      const n = parseNote(readFileSync(path, 'utf8'));
+      expect(n.status).toBe('blocked');
+      expect(n.wait).toBe('cutover vs dual-write');
+      expect(lastFrame() ?? '').toMatch(/cutover vs dual-write/);
     } finally {
       unmount();
     }
@@ -103,6 +125,29 @@ describe('TUI keys write the note file', () => {
       await typeKeys(stdin, ['\r'], 40);
       await waitFor(() => parseNote(readFileSync(path, 'utf8')).thread === 'from-keys');
       expect(parseNote(readFileSync(path, 'utf8')).thread).toBe('from-keys');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('v opens todo input and enter appends a validate item on disk', async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      await typeKeys(stdin, ['v'], 40);
+      // Dialog title is "todo" (user-facing); assert the input mode opened.
+      await waitFor(() => /todo/i.test(lastFrame() ?? ''));
+      await typeKeys(stdin, 'new-todo-item'.split(''), 20);
+      await typeKeys(stdin, ['\r'], 40);
+      await waitFor(() =>
+        parseNote(readFileSync(path, 'utf8')).validate.some((x) => x.text === 'new-todo-item'),
+      );
+      const n = parseNote(readFileSync(path, 'utf8'));
+      expect(n.validate.map((x) => x.text)).toContain('new-todo-item');
+      // Prior items preserved
+      expect(n.validate.map((x) => x.text)).toEqual(
+        expect.arrayContaining(['alpha', 'beta', 'new-todo-item']),
+      );
     } finally {
       unmount();
     }

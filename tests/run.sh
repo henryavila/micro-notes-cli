@@ -108,11 +108,33 @@ if printf '%s\n' "$body" | grep -q 'do not touch'; then
 fi
 pass "human --replace"
 
-# blocked badge
-"$MN" status blocked >/dev/null
+# blocked without reason must fail
+if "$MN" status blocked >/dev/null 2>&1; then
+  fail "status blocked without wait should exit non-zero"
+fi
+pass "blocked without wait fails"
+
+# blocked + reason → badge shows needs you · reason
+"$MN" status blocked -- "cutover vs dual-write" >/dev/null
 out="$("$MN" show)"
 printf '%s\n' "$out" | grep -q "needs you" || fail "blocked badge"
-pass "blocked badge"
+printf '%s\n' "$out" | grep -q "cutover vs dual-write" || fail "blocked reason missing from show"
+printf '%s\n' "$out" | grep -qi "blocked on" || fail "blocked on label missing"
+pass "blocked badge + reason"
+
+# unblocking clears Wait
+"$MN" status coding >/dev/null
+wait_body="$(awk '/^## Wait$/{p=1;next} /^## /{p=0} p' "$MN_FILE" | tr -d '[:space:]')"
+[[ -z "$wait_body" ]] || fail "Wait should clear when leaving blocked"
+pass "unblock clears wait"
+
+# ai-dev pack statuses + list
+"$MN" status review-plan >/dev/null || fail "status review-plan"
+"$MN" status review-code >/dev/null || fail "status review-code"
+list_out="$("$MN" status --list)"
+printf '%s\n' "$list_out" | grep -q review-plan || fail "status --list missing review-plan"
+printf '%s\n' "$list_out" | grep -q review-code || fail "status --list missing review-code"
+pass "ai-dev status pack"
 
 # ready + placeholder must NOT show "N to validate"
 "$MN" clear-validate >/dev/null

@@ -1,12 +1,25 @@
 /**
  * MICRONOTE.md parse / serialize — English canonical schema.
- * Matches bin/mn file format (Thread, Description, Now, Validate, Human, Closed).
+ * Matches bin/mn file format (Thread, Description, Now, Wait, Validate, Human, Closed).
+ *
+ * Wait = what is blocking (required when status=blocked; cleared when unblocked).
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
-export type NoteStatus = 'idle' | 'working' | 'blocked' | 'ready';
+import {
+  statusIds,
+  statusToIntent as catalogStatusToIntent,
+  statusGlyph as catalogStatusGlyph,
+  statusTitle as catalogStatusTitle,
+  statusRequiresWait,
+  isValidStatus,
+  canonicalizeStatus,
+} from './status-catalog.js';
+
+/** @deprecated free-form string; valid ids come from the status catalog (ai-dev pack). */
+export type NoteStatus = string;
 
 export interface ValidateItem {
   text: string;
@@ -19,13 +32,16 @@ export interface MicroNote {
   thread: string;
   description: string;
   now: string;
+  /** What is blocking — required when status requires wait (blocked). */
+  wait: string;
   validate: ValidateItem[];
   human: string;
   closed: string[];
 }
 
 export const PLACEHOLDER_VALIDATE = '(nothing yet)';
-export const VALID_STATUSES: NoteStatus[] = ['idle', 'working', 'blocked', 'ready'];
+/** Live catalog order (ai-dev by default). Prefer statusIds() for new code. */
+export const VALID_STATUSES: string[] = statusIds();
 
 export function notePath(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): string {
   if (env.MN_FILE && env.MN_FILE.trim()) return env.MN_FILE.trim();
@@ -45,6 +61,7 @@ export function emptyNote(): MicroNote {
     thread: '',
     description: '',
     now: '',
+    wait: '',
     validate: [],
     human: '',
     closed: [],
@@ -57,6 +74,8 @@ function normalizeHeading(h: string): string {
     Fio: 'Thread',
     Descricao: 'Description',
     Agora: 'Now',
+    Espera: 'Wait',
+    Bloqueio: 'Wait',
     Validar: 'Validate',
     Humano: 'Human',
     Fechado: 'Closed',
@@ -72,6 +91,7 @@ export function parseNote(raw: string): MicroNote {
     Thread: [],
     Description: [],
     Now: [],
+    Wait: [],
     Validate: [],
     Human: [],
     Closed: [],
@@ -113,6 +133,7 @@ export function parseNote(raw: string): MicroNote {
   note.thread = trimBody(bodies.Thread ?? []);
   note.description = trimBody(bodies.Description ?? []);
   note.now = trimBody(bodies.Now ?? []);
+  note.wait = trimBody(bodies.Wait ?? []);
   note.human = trimBody(bodies.Human ?? []);
 
   note.validate = [];
@@ -158,6 +179,9 @@ export function serializeNote(note: MicroNote): string {
     return b ? `## ${title}\n${b}\n` : `## ${title}\n\n`;
   };
 
+  // When status does not require wait, do not persist a stale reason.
+  const waitBody = statusRequiresWait(String(note.status || 'idle')) ? note.wait : '';
+
   return [
     '# microNote',
     `updated: ${note.updated || nowHm()}`,
@@ -169,6 +193,8 @@ export function serializeNote(note: MicroNote): string {
     '',
     block('Now', note.now).trimEnd(),
     '',
+    block('Wait', waitBody).trimEnd(),
+    '',
     `## Validate`,
     ...validateLines,
     '',
@@ -178,6 +204,23 @@ export function serializeNote(note: MicroNote): string {
     ...closedLines,
     '',
   ].join('\n');
+}
+
+/** True when this status requires Wait and Wait is empty — invalid card. */
+export function blockedNeedsWait(note: MicroNote): boolean {
+  return statusRequiresWait(String(note.status)) && !note.wait.trim();
+}
+
+/** Apply a status change; clears Wait when leaving a requiresWait status. */
+export function withStatus(note: MicroNote, status: string): MicroNote {
+  const next: MicroNote = {
+    ...note,
+    status,
+    validate: [...note.validate],
+    closed: [...note.closed],
+  };
+  if (!statusRequiresWait(status)) next.wait = '';
+  return next;
 }
 
 export function readNoteFile(path: string): MicroNote | null {
@@ -202,21 +245,23 @@ export function initNoteFile(path: string): MicroNote {
   return readNoteFile(path) ?? note;
 }
 
-/** blink state intent for header/list status column */
+/** blink state intent for header/list status column — from catalog */
 export function statusToIntent(status: string): string {
-  switch (status) {
-    case 'ready':
-      return 'ok';
-    case 'blocked':
-      return 'error';
-    case 'working':
-      return 'drift';
-    case 'idle':
-    default:
-      return 'pending';
-  }
+  return catalogStatusToIntent(status);
+}
+
+/** Width-1 status mark for pane titles — from catalog */
+export function statusGlyph(status: string): string {
+  return catalogStatusGlyph(status);
+}
+
+/** Pane / header title: `◉ coding` */
+export function statusTitle(status: string): string {
+  return catalogStatusTitle(status);
 }
 
 export function openValidateCount(note: MicroNote): number {
   return note.validate.filter((v) => !v.done).length;
 }
+
+export { statusIds, isValidStatus, canonicalizeStatus, statusRequiresWait };

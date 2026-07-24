@@ -53,7 +53,7 @@ describe('TUI App loads MN_FILE content', () => {
     const { path } = writeTempNote(dir, {
       thread: 'smoke-thread-unique',
       now: 'writing-e2e-unique',
-      status: 'working',
+      status: 'coding',
       description: 'desc-unique',
       validate: [{ text: 'val-unique', done: false }],
     });
@@ -66,8 +66,12 @@ describe('TUI App loads MN_FILE content', () => {
       // AND — all must appear. OR would pass on header alone.
       expect(frame).toContain('smoke-thread-unique');
       expect(frame).toContain('writing-e2e-unique');
-      expect(frame).toMatch(/working/i);
+      expect(frame).toMatch(/coding/i);
       expect(frame).toContain('val-unique');
+      // Status pane title carries a glyph mark (◉ coding)
+      expect(frame).toMatch(/◉\s*coding/);
+      // Footer exposes the todo shortcut (and other primary keys)
+      expect(frame).toMatch(/\btodo\b/i);
     } finally {
       unmount();
     }
@@ -79,6 +83,33 @@ describe('TUI App loads MN_FILE content', () => {
     try {
       const frame = (lastFrame() ?? '').toLowerCase();
       expect(frame).toMatch(/no file|press i|init/);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('long description wraps instead of truncating with ellipsis', () => {
+    // Distinct tokens so we can assert the full body is present even when
+    // the terminal is narrow (ink-testing-library defaults ~80 cols).
+    const head = 'WRAPHEAD_unique_prefix_alpha';
+    const tail = 'WRAPTAIL_unique_suffix_omega';
+    const mid = 'middle_segment_'.repeat(12);
+    const longDesc = `${head} ${mid} ${tail}`;
+    const { path } = writeTempNote(dir, {
+      thread: 'wrap-thread',
+      now: 'wrap-now',
+      status: 'coding',
+      description: longDesc,
+    });
+    process.env.MN_FILE = path;
+
+    const { lastFrame, unmount } = render(<App />);
+    try {
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain(head);
+      expect(frame).toContain(tail);
+      // Truncation would inject an ellipsis and drop the tail end of the line.
+      expect(frame).not.toMatch(/WRAPHEAD[^\n]*…/);
     } finally {
       unmount();
     }

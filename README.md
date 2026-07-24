@@ -48,7 +48,8 @@ The TUI (or `mn show` / side pane) owns the full card.
 | `t` | edit thread (short label) |
 | `d` | edit description (long context) |
 | `n` | edit now |
-| `v` | add validate item |
+| `w` | blocked on (required when `blocked`) |
+| `v` | add todo (validate item) |
 | `s` | status picker |
 | `h` | human note |
 | `c` | close decision |
@@ -66,7 +67,8 @@ External `mn thread …` / agent writes update the file; the TUI **reloads** via
 ```markdown
 # microNote
 updated: HH:MM
-status: idle|working|blocked|ready
+status: idle|designing|await-design|planning|review-plan|coding|review-code|blocked|ready
+# (alias: working → coding; override: ~/.config/mn/statuses.json)
 
 ## Thread
 short label
@@ -76,6 +78,9 @@ long re-entry context
 
 ## Now
 what is happening
+
+## Wait
+what is blocking (required when status=blocked)
 
 ## Validate
 - [ ] (nothing yet)
@@ -93,7 +98,8 @@ Legacy PT files (`## Fio`, `atualizado:`, …) migrate automatically.
 | **Thread** | Short label |
 | **Description** | Long background for re-entry |
 | **Now** | Current activity |
-| **Validate** | Human checklist |
+| **Wait** | What is blocking — **required when `status=blocked`**; cleared when unblocked |
+| **Validate** | Human checklist (todo) |
 | **Human** | Human-only notes |
 | **Closed** | Settled decisions |
 
@@ -109,8 +115,10 @@ Legacy PT files (`## Fio`, `atualizado:`, …) migrate automatically.
 | `mn thread "…"` | set thread (quiet) |
 | `mn description [--append] "…"` | set/append description |
 | `mn now "…"` | set now |
+| `mn wait "…"` | set what is blocking |
 | `mn validate "…"` | add checklist item |
-| `mn status idle\|working\|blocked\|ready` | set status |
+| `mn status idle\|working\|blocked\|ready` | set status (`blocked` needs reason) |
+| `mn status blocked -- "reason"` | set blocked + wait in one shot |
 | `mn human [--replace] "…"` | human note |
 | `mn close "…"` | closed decision |
 | `mn done [n\|text]` | mark validate done |

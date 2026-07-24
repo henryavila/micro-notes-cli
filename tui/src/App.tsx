@@ -21,14 +21,17 @@ import {
 } from '@henryavila/blink-tui';
 import {
   type MicroNote,
-  type NoteStatus,
-  VALID_STATUSES,
+  blockedNeedsWait,
   emptyNote,
   initNoteFile,
   notePath,
   openValidateCount,
   readNoteFile,
+  statusIds,
+  statusRequiresWait,
   statusToIntent,
+  statusTitle,
+  withStatus,
   writeNoteFile,
 } from './note.js';
 
@@ -38,15 +41,16 @@ type Mode =
   | { kind: 'status'; focus: number }
   | { kind: 'help' };
 
-type InputField = 'thread' | 'description' | 'now' | 'human' | 'close' | 'validate';
+type InputField = 'thread' | 'description' | 'now' | 'wait' | 'human' | 'close' | 'validate';
 
 const FIELD_TITLE: Record<InputField, string> = {
   thread: 'thread',
-  description: 'description',
+  description: 'details',
   now: 'now',
+  wait: 'blocked on',
   human: 'human',
   close: 'close',
-  validate: 'validate',
+  validate: 'todo',
 };
 
 function shortPath(p: string): string {
@@ -55,28 +59,75 @@ function shortPath(p: string): string {
   return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
 }
 
-function bodyLines(text: string, empty = '(empty)'): string[] {
+function bodyLines(text: string): string[] {
   const t = text.trim();
-  if (!t) return [empty];
+  if (!t) return [];
   return t.split('\n');
 }
 
-function Section({
+/**
+ * Short block: icon + color label as visual separator.
+ * Hidden when empty — unless `required` (Thread): always shown so the card is never blank.
+ *
+ * Optional `mutedLines` (e.g. description under thread) render in the same
+ * indented body as the main lines — no extra gap, same relation as body ↔ title.
+ */
+function ShortSection({
+  icon,
   label,
   color,
-  children,
+  bodyColor,
+  lines,
+  mutedLines,
+  mutedColor,
   first,
+  required,
+  emptyHint,
+  hintColor,
 }: {
+  icon: string;
   label: string;
   color: string;
-  children: React.ReactNode;
+  bodyColor?: string;
+  lines: string[];
+  /** Secondary prose under the main body (same indent, no gap). */
+  mutedLines?: string[];
+  mutedColor?: string;
   first?: boolean;
-}): React.ReactElement {
+  /** Always render (used for Thread). */
+  required?: boolean;
+  /** Shown in place of body when required and empty. */
+  emptyHint?: string;
+  hintColor?: string;
+}): React.ReactElement | null {
+  const muted = mutedLines?.filter((l) => l.length > 0) ?? [];
+  if (lines.length === 0 && muted.length === 0 && !required) return null;
   return (
     <Box flexDirection="column" marginTop={first ? 0 : 1}>
-      <Text color={color}>{label}</Text>
-      <Box flexDirection="column" paddingLeft={1}>
-        {children}
+      <Text>
+        <Text color={color}>
+          {icon} {label}
+        </Text>
+      </Text>
+      <Box flexDirection="column" paddingLeft={2}>
+        {lines.length > 0
+          ? lines.map((l, i) => (
+              <Text key={`${label}-${i}`} color={bodyColor ?? color} wrap="wrap">
+                {l}
+              </Text>
+            ))
+          : emptyHint
+            ? [
+                <Text key={`${label}-hint`} color={hintColor ?? color} dimColor wrap="wrap">
+                  {emptyHint}
+                </Text>,
+              ]
+            : null}
+        {muted.map((l, i) => (
+          <Text key={`${label}-muted-${i}`} color={mutedColor} dimColor wrap="wrap">
+            {l}
+          </Text>
+        ))}
       </Box>
     </Box>
   );
@@ -152,9 +203,6 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   );
 
   const validateRows: ListRowData[] = useMemo(() => {
-    if (note.validate.length === 0) {
-      return [{ id: '_empty', label: '(nothing yet)', selected: false, muted: true }];
-    }
     return note.validate.map((v, i) => ({
       id: String(i),
       label: v.text,
@@ -164,14 +212,19 @@ function AppInner({ path }: { path: string }): React.ReactElement {
 
   const focusId =
     note.validate.length === 0
-      ? '_empty'
+      ? ''
       : String(Math.min(focusValidate, Math.max(0, note.validate.length - 1)));
 
-  const statusChoices: ChoiceItem[] = VALID_STATUSES.map((s) => ({
-    id: s,
-    label: s,
-    state: statusToIntent(s),
-  }));
+  const statuses = useMemo(() => statusIds(), []);
+  const statusChoices: ChoiceItem[] = useMemo(
+    () =>
+      statuses.map((s) => ({
+        id: s,
+        label: statusTitle(s),
+        state: statusToIntent(s),
+      })),
+    [statuses],
+  );
 
   const applyInput = (field: InputField, value: string) => {
     const next: MicroNote = { ...note, validate: [...note.validate], closed: [...note.closed] };
@@ -185,6 +238,17 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       case 'now':
         next.now = value.trim();
         break;
+      case 'wait': {
+        const w = value.trim();
+        // Wait required while status requiresWait; empty is refused.
+        if (statusRequiresWait(String(next.status)) && !w) {
+          setFlash('blocked needs reason');
+          setTimeout(() => setFlash(null), 1200);
+          return;
+        }
+        next.wait = w;
+        break;
+      }
       case 'human':
         next.human = value;
         break;
@@ -219,12 +283,19 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         return;
       }
       if (key.downArrow || input === 'j') {
-        setMode({ kind: 'status', focus: Math.min(VALID_STATUSES.length - 1, mode.focus + 1) });
+        setMode({ kind: 'status', focus: Math.min(statuses.length - 1, mode.focus + 1) });
         return;
       }
       if (key.return) {
-        const st = VALID_STATUSES[mode.focus] as NoteStatus;
-        save({ ...note, status: st });
+        const st = statuses[mode.focus] ?? 'idle';
+        const next = withStatus(note, st);
+        if (statusRequiresWait(st)) {
+          // requiresWait statuses always ask what is blocking.
+          save(next);
+          openInput('wait', next.wait || note.wait);
+          return;
+        }
+        save(next);
         setMode({ kind: 'main' });
       }
       return;
@@ -291,6 +362,11 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       openInput('now', note.now);
       return;
     }
+    if (input === 'w') {
+      // Wait / blocked-on reason (required when status=blocked).
+      openInput('wait', note.wait);
+      return;
+    }
     if (input === 'h') {
       openInput('human', note.human);
       return;
@@ -304,7 +380,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       return;
     }
     if (input === 's' || input === 'e') {
-      const idx = VALID_STATUSES.indexOf(note.status as NoteStatus);
+      const idx = statuses.indexOf(String(note.status));
       setMode({ kind: 'status', focus: idx >= 0 ? idx : 0 });
       return;
     }
@@ -332,8 +408,16 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   });
 
   const openN = openValidateCount(note);
-  const listHeight = Math.max(3, Math.min(8, Math.floor((rows || 30) * 0.25)));
+  const listHeight = Math.max(
+    2,
+    Math.min(8, Math.max(note.validate.length, 1), Math.floor((rows || 30) * 0.25)),
+  );
   const dialogW = Math.min(Math.max(40, (columns || 80) - 6), 72);
+  const threadLines = bodyLines(note.thread);
+  const nowLines = bodyLines(note.now);
+  const humanLines = bodyLines(note.human);
+  const hasValidate = note.validate.length > 0;
+  const hasClosed = note.closed.length > 0;
 
   if (mode.kind === 'help') {
     return (
@@ -341,18 +425,22 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         <Header title="microNote" subtitle="keys" right="q back" />
         <Box flexDirection="column" marginTop={1}>
           {[
-            't  thread (short label)',
-            'd  description (long context)',
+            't  thread (title)',
+            'd  details (muted context)',
             'n  now',
-            'v  add validate item',
+            'w  blocked on (required when blocked)',
+            'v  add todo (validate item)',
             's  status picker',
             'h  human note',
             'c  close decision',
-            'j/k or arrows  move validate focus',
-            'space / x  toggle validate item',
+            'j/k or arrows  move todo focus',
+            'space / x  toggle todo item',
             'r  reload file',
             'i  init file (if missing)',
             'q  quit',
+            '',
+            'blocked status always asks what is blocking (Wait)',
+            'empty blocks are hidden — not shown as (empty)',
           ].map((line) => (
             <Text key={line} color={tokens.fg}>
               {line}
@@ -364,15 +452,16 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   }
 
   if (mode.kind === 'status') {
+    const pickTitle = statusTitle(statuses[mode.focus] ?? note.status);
     return (
       <Box flexDirection="column" height={rows || 24}>
-        <Header title="status" subtitle="pick" right="esc cancel" />
+        <Header title={pickTitle} subtitle="pick status" right="esc cancel" />
         <Box flexGrow={1} paddingX={1} paddingY={1}>
-          <Pane title="status" tone="focus" flexGrow={1}>
+          <Pane title={pickTitle} tone="focus" flexGrow={1}>
             <ChoicePicker
               choices={statusChoices}
-              focusedId={VALID_STATUSES[mode.focus]}
-              height={6}
+              focusedId={statuses[mode.focus]}
+              height={Math.min(12, statuses.length + 1)}
             />
           </Pane>
         </Box>
@@ -412,13 +501,20 @@ function AppInner({ path }: { path: string }): React.ReactElement {
     );
   }
 
+  const waitLines = bodyLines(note.wait);
+  const isBlocked = statusRequiresWait(String(note.status));
+  const needsWait = blockedNeedsWait(note);
   const rightBits =
     flash ??
     (note.status === 'ready' && openN > 0
       ? `${openN} to validate`
-      : note.status === 'blocked'
-        ? 'needs you'
-        : String(note.status));
+      : isBlocked
+        ? note.wait.trim()
+          ? note.wait.trim().length > 28
+            ? `needs you · ${note.wait.trim().slice(0, 25)}…`
+            : `needs you · ${note.wait.trim()}`
+          : 'needs you · set w'
+        : statusTitle(String(note.status)));
 
   return (
     <Box flexDirection="column" height={rows || 24} width={columns}>
@@ -426,7 +522,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         title="microNote"
         subtitle={shortPath(path)}
         right={
-          <Text color={tokens.fgMuted}>
+          <Text color={isBlocked ? tokens.stateErr : tokens.fgMuted}>
             {note.updated || '—'} · {rightBits}
           </Text>
         }
@@ -436,67 +532,102 @@ function AppInner({ path }: { path: string }): React.ReactElement {
           <Banner tone="warn">no file — press i to init</Banner>
         </Box>
       ) : null}
+      {needsWait ? (
+        <Box paddingX={1}>
+          <Banner tone="error">blocked — press w: what is blocking?</Banner>
+        </Box>
+      ) : null}
       <Box flexGrow={1} flexDirection="column" paddingX={1}>
         <Pane
-          title={`${note.status}`}
-          tone={note.status === 'blocked' ? 'error' : 'focus'}
+          title={statusTitle(String(note.status))}
+          tone={isBlocked ? 'error' : 'focus'}
           flexGrow={1}
         >
           <Box flexDirection="column">
-            <Section label="thread" color={tokens.accent} first>
-              {bodyLines(note.thread).map((l, i) => (
-                <Text key={`th-${i}`} color={tokens.fg} wrap="truncate">
-                  {l}
+            {/* Blocked-on first when blocked — the re-entry answer for "what stops me". */}
+            {isBlocked ? (
+              <ShortSection
+                icon="!"
+                label="blocked on"
+                color={tokens.stateErr}
+                bodyColor={tokens.fg}
+                lines={waitLines}
+                first
+                required
+                emptyHint="set with w — required"
+                hintColor={tokens.stateErr}
+              />
+            ) : null}
+            <ShortSection
+              icon="◈"
+              label="thread"
+              color={tokens.accent}
+              bodyColor={tokens.fg}
+              lines={threadLines}
+              // details sit under thread body (same indent, no gap) — like now body under "now"
+              mutedLines={bodyLines(note.description)}
+              mutedColor={tokens.fgDim}
+              first={!isBlocked}
+              required
+              emptyHint="set with t"
+              hintColor={tokens.fgDim}
+            />
+            <ShortSection
+              icon="→"
+              label="now"
+              color={tokens.accentAlt}
+              bodyColor={tokens.fg}
+              lines={nowLines}
+            />
+            {hasValidate ? (
+              <Box flexDirection="column" marginTop={1}>
+                <Text color={tokens.stateOk ?? tokens.accent}>
+                  ☐ todo
+                  {openN > 0 ? (
+                    <Text color={tokens.fgMuted}> · {openN} open</Text>
+                  ) : null}
                 </Text>
-              ))}
-            </Section>
-            <Section label="description" color={tokens.fgMuted}>
-              {bodyLines(note.description).map((l, i) => (
-                <Text key={`de-${i}`} color={tokens.fg} wrap="truncate">
-                  {l}
-                </Text>
-              ))}
-            </Section>
-            <Section label="now" color={tokens.fg}>
-              {bodyLines(note.now).map((l, i) => (
-                <Text key={`nw-${i}`} color={tokens.fg} wrap="truncate">
-                  {l}
-                </Text>
-              ))}
-            </Section>
-            <Box marginTop={1}>
-              <Text color={tokens.fgDim}>validate</Text>
-            </Box>
-            <List rows={validateRows} focusedId={focusId} height={listHeight} />
-            <Section label="human" color={tokens.fgMuted}>
-              {bodyLines(note.human).map((l, i) => (
-                <Text key={`hu-${i}`} color={tokens.fgMuted} wrap="truncate">
-                  {l}
-                </Text>
-              ))}
-            </Section>
-            <Section label="closed" color={tokens.fgDim}>
-              {(note.closed.length ? note.closed : ['—']).map((l, i) => (
-                <Text key={`cl-${i}`} color={tokens.fgDim} wrap="truncate">
-                  {note.closed.length ? `• ${l}` : l}
-                </Text>
-              ))}
-            </Section>
+                <List rows={validateRows} focusedId={focusId} height={listHeight} />
+              </Box>
+            ) : null}
+            <ShortSection
+              icon="✎"
+              label="human"
+              color={tokens.fgMuted}
+              bodyColor={tokens.fgMuted}
+              lines={humanLines}
+            />
+            {hasClosed ? (
+              <Box flexDirection="column" marginTop={1}>
+                <Text color={tokens.fgDim}>✓ closed</Text>
+                <Box flexDirection="column" paddingLeft={2}>
+                  {note.closed.map((l, i) => (
+                    <Text key={`cl-${i}`} color={tokens.fgDim} wrap="wrap">
+                      • {l}
+                    </Text>
+                  ))}
+                </Box>
+              </Box>
+            ) : null}
           </Box>
         </Pane>
       </Box>
       <Footer
         keys={[
+          // Order = importance: Footer drops chips from the right when narrow.
           { k: 't', desc: 'thread' },
-          { k: 'd', desc: 'desc' },
           { k: 'n', desc: 'now' },
-          { k: 'v', desc: 'validate' },
+          ...(isBlocked ? ([{ k: 'w', desc: 'blocked on' }] as const) : []),
+          { k: 'v', desc: 'todo' },
           { k: 's', desc: 'status' },
           { k: 'sp', desc: 'toggle' },
+          { k: 'h', desc: 'human' },
+          { k: 'c', desc: 'close' },
+          { k: 'd', desc: 'details' },
           { k: '?', desc: 'help' },
           { k: 'q', desc: 'quit' },
         ]}
-        right={flash ? flash : `${openN} open`}
+        right={flash ? flash : needsWait ? 'need w' : `${openN} open`}
       />
     </Box>
   );

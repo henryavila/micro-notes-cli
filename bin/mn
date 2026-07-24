@@ -8,7 +8,8 @@ set -euo pipefail
 MN_VERSION="0.4.0"
 DEFAULT_FILE="MICRONOTE.md"
 PLACEHOLDER_VALIDATE="- [ ] (nothing yet)"
-VALID_STATUSES="idle|working|blocked|ready"
+# Fallback until catalog loads (ai-dev pack is the product default).
+VALID_STATUSES="idle|designing|await-design|planning|review-plan|coding|review-code|blocked|ready"
 CONFIG_DIR="${MN_CONFIG_DIR:-$HOME/.config/mn}"
 CONFIG_FILE="${MN_CONFIG_FILE:-$CONFIG_DIR/config}"
 SHARE_DIR_DEFAULT="${MN_SHARE_DIR:-$HOME/.local/share/mn}"
@@ -35,6 +36,61 @@ _mn_script_path() {
 
 MN_BIN="$(_mn_script_path)"
 MN_BIN_DIR="$(cd "$(dirname "$MN_BIN")" && pwd)"
+# Repo root: bin/ → parent (works for symlink install --link)
+MN_REPO_ROOT="$(cd "$MN_BIN_DIR/.." 2>/dev/null && pwd)"
+
+# ── status catalog (ai-dev pack + ~/.config/mn/statuses.json override) ──
+_status_catalog() {
+  local script cand
+  for cand in \
+    "${MN_REPO_ROOT}/scripts/status-catalog.mjs" \
+    "${SHARE_DIR_DEFAULT}/scripts/status-catalog.mjs" \
+    "$MN_BIN_DIR/../scripts/status-catalog.mjs"
+  do
+    if [[ -f "$cand" ]]; then
+      node "$cand" "$@" 2>/dev/null && return 0
+    fi
+  done
+  # last-resort static fallback
+  case "${1:-}" in
+    ids) printf '%s\n' "$VALID_STATUSES" ;;
+    list) printf '%s\n' idle designing await-design planning review-plan coding review-code blocked ready ;;
+    glyph)
+      case "${2:-}" in
+        idle) printf '○\n' ;; designing) printf '◈\n' ;; await-design) printf '◇\n' ;;
+        planning) printf '▤\n' ;; review-plan) printf '▣\n' ;; coding) printf '◉\n' ;;
+        review-code) printf '◐\n' ;; blocked) printf '!\n' ;; ready) printf '►\n' ;;
+        working) printf '◉\n' ;; *) printf '?\n' ;;
+      esac
+      ;;
+    label) printf '%s\n' "${2:-?}" ;;
+    intent)
+      case "${2:-}" in
+        idle|designing|planning|coding|working) printf 'ignore\n' ;;
+        *) printf 'act\n' ;;
+      esac
+      ;;
+    requires-wait) [[ "${2:-}" == "blocked" ]] && printf '1\n' || printf '0\n' ;;
+    valid)
+      if [[ "${2:-}" =~ ^(idle|designing|await-design|planning|review-plan|coding|review-code|blocked|ready|working)$ ]]; then
+        printf '1\n'
+      else
+        printf '0\n'
+      fi
+      ;;
+    canon) [[ "${2:-}" == "working" ]] && printf 'coding\n' || printf '%s\n' "${2:-}" ;;
+    *) return 1 ;;
+  esac
+}
+
+_load_status_catalog() {
+  local ids
+  ids="$(_status_catalog ids | tr -d '\r')"
+  if [[ -n "$ids" && "$ids" == *"|"* ]]; then
+    VALID_STATUSES="$ids"
+  fi
+}
+_load_status_catalog
 
 # ── messages (English only) ─────────────────────────────────────────
 ACTIVE_LANG="en"
@@ -47,12 +103,13 @@ MSG_ALREADY_EXISTS='mn: already exists %s'
 MSG_CREATED='mn: created %s'
 MSG_UNKNOWN_CMD='mn: unknown command: %s'
 MSG_SEE_HELP='    mn help'
-MSG_INVALID_STATE='mn: invalid status: %s (use idle|working|blocked|ready)'
+MSG_INVALID_STATE='mn: invalid status: %s'
 MSG_USAGE_THREAD='usage: mn thread <text>              (short thread label)'
 MSG_USAGE_DESCRIPTION='usage: mn description [--append] <text>   (long context)'
 MSG_USAGE_NOW='usage: mn now <text>'
 MSG_USAGE_VALIDATE='usage: mn validate <text>'
-MSG_USAGE_STATUS='usage: mn status <idle|working|blocked|ready>'
+MSG_USAGE_STATUS='usage: mn status <id>   (see: mn status --list; blocked needs reason)'
+MSG_USAGE_WAIT='usage: mn wait <text>                 (what is blocking — required when blocked)'
 MSG_USAGE_HUMAN='usage: mn human [--replace] <text>'
 MSG_USAGE_CLOSE='usage: mn close <text>'
 MSG_CHECK_MISSING='fail: file not found (%s) — mn init'
@@ -60,11 +117,14 @@ MSG_CHECK_HEADING='fail: missing heading ## %s'
 MSG_CHECK_STATE_EMPTY='fail: empty status'
 MSG_CHECK_STATE_INVALID='fail: invalid status: %s'
 MSG_CHECK_THREAD_EMPTY='fail: Thread is empty'
+MSG_CHECK_WAIT_EMPTY='fail: status=blocked requires ## Wait (what is blocking) — mn wait "…"'
 MSG_CHECK_VALIDATE_EMPTY='fail: Validate empty — add an item or: - [ ] (nothing yet)'
 MSG_CHECK_VALIDATE_NO_CB='fail: Validate has no checkboxes — use mn validate "…" or the placeholder'
 MSG_CHECK_OK='ok'
 MSG_TO_VALIDATE='%s to validate'
 MSG_NEEDS_YOU='needs you'
+MSG_BLOCKED_ON='blocked on'
+MSG_STATUS_BLOCKED_NEEDS_WAIT='mn: status=blocked requires a reason — mn wait "what is blocking" (or: mn status blocked -- "reason")'
 MSG_EMPTY='(empty)'
 MSG_PLACEHOLDER_BODY='(nothing yet)'
 MSG_DASH='—'
@@ -73,7 +133,8 @@ MSG_MENU_VALIDATE='validate — what I should check'
 MSG_MENU_THREAD='thread — short thread label'
 MSG_MENU_DESCRIPTION='description — long thread context'
 MSG_MENU_NOW='now — what is happening'
-MSG_MENU_STATUS='status — idle/working/blocked/ready'
+MSG_MENU_STATUS='status — pick from catalog (ai-dev)'
+MSG_MENU_WAIT='wait — what is blocking (when blocked)'
 MSG_MENU_HUMAN='human — my note'
 MSG_MENU_CLOSE='close — closed decision'
 MSG_MENU_DONE='done — mark validate item done'
@@ -87,7 +148,8 @@ MSG_PROMPT_VALIDATE='validate: '
 MSG_PROMPT_THREAD='thread (short label): '
 MSG_PROMPT_DESCRIPTION='description (context): '
 MSG_PROMPT_NOW='now: '
-MSG_PROMPT_STATUS='status (idle|working|blocked|ready): '
+MSG_PROMPT_STATUS='status id: '
+MSG_PROMPT_WAIT='blocked on (what is blocking): '
 MSG_PROMPT_HUMAN='human: '
 MSG_PROMPT_CLOSE='close: '
 MSG_PROMPT_DONE='done (n or text, empty=first): '
@@ -204,6 +266,9 @@ status: idle
 ## Now
 
 
+## Wait
+
+
 ## Validate
 $PLACEHOLDER_VALIDATE
 
@@ -215,28 +280,44 @@ $PLACEHOLDER_VALIDATE
 EOF
 }
 
+# Insert missing ## Heading after a reference heading (or at end before next ##).
+_ensure_heading_after() {
+  local after_h="$1" new_h="$2"
+  grep -qx "$new_h" "$NOTE" 2>/dev/null && return 0
+  local content out seen=0 inserted=0 line
+  content="$(cat "$NOTE")"
+  out=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ $seen -eq 1 && "$line" == "## "* ]]; then
+      out+="$new_h"$'\n'$'\n'
+      inserted=1
+      seen=0
+    fi
+    [[ "$line" == "$after_h" ]] && seen=1
+    out+="$line"$'\n'
+  done <<<"$content"
+  if [[ $inserted -eq 0 ]]; then
+    out+="$new_h"$'\n'$'\n'
+  fi
+  atomic_write "$out"
+}
+
 migrate_note_to_en() {
   [[ -f "$NOTE" ]] || return 0
   if grep -qE '^updated:' "$NOTE" 2>/dev/null && grep -qx '## Thread' "$NOTE" 2>/dev/null; then
     if ! grep -qx '## Description' "$NOTE" 2>/dev/null; then
-      local content out seen_thread=0 inserted=0 line
-      content="$(cat "$NOTE")"
-      out=""
-      while IFS= read -r line || [[ -n "$line" ]]; do
-        if [[ $seen_thread -eq 1 && "$line" == "## "* && "$line" != "## Description" ]]; then
-          out+="## Description"$'\n'$'\n'
-          inserted=1
-          seen_thread=0
-        fi
-        [[ "$line" == "## Thread" ]] && seen_thread=1
-        out+="$line"$'\n'
-      done <<<"$content"
-      [[ $inserted -eq 0 ]] && out+="## Description"$'\n'$'\n'
-      atomic_write "$out"
+      _ensure_heading_after "## Thread" "## Description"
+    fi
+    if ! grep -qx '## Wait' "$NOTE" 2>/dev/null; then
+      _ensure_heading_after "## Now" "## Wait"
     fi
     return 0
   fi
   if ! grep -qE '^(atualizado|estado):' "$NOTE" 2>/dev/null && ! grep -qx '## Fio' "$NOTE" 2>/dev/null; then
+    # EN file missing Wait only
+    if grep -qx '## Thread' "$NOTE" 2>/dev/null && ! grep -qx '## Wait' "$NOTE" 2>/dev/null; then
+      _ensure_heading_after "## Now" "## Wait"
+    fi
     return 0
   fi
   local content out seen=0 inserted=0 line
@@ -247,6 +328,8 @@ migrate_note_to_en() {
     -e 's/^## Fio$/## Thread/' \
     -e 's/^## Descricao$/## Description/' \
     -e 's/^## Agora$/## Now/' \
+    -e 's/^## Espera$/## Wait/' \
+    -e 's/^## Bloqueio$/## Wait/' \
     -e 's/^## Validar$/## Validate/' \
     -e 's/^## Humano$/## Human/' \
     -e 's/^## Fechado$/## Closed/' \
@@ -268,6 +351,9 @@ migrate_note_to_en() {
     content="$out"
   fi
   atomic_write "$content"
+  if ! grep -qx '## Wait' "$NOTE" 2>/dev/null; then
+    _ensure_heading_after "## Now" "## Wait"
+  fi
 }
 
 ensure_schema() { migrate_note_to_en; }
@@ -431,18 +517,74 @@ cmd_validate() {
   ok_write validate "$text"
 }
 
-cmd_status() {
-  local val="${1:-}"
-  [[ -n "$val" ]] || { printf '%s\n' "$MSG_USAGE_STATUS" >&2; exit 2; }
-  if ! [[ "$val" =~ ^($VALID_STATUSES)$ ]]; then
-    msg "$MSG_INVALID_STATE" "$val" >&2
-    exit 2
-  fi
+cmd_wait() {
+  local text="$*"
+  [[ -n "$text" ]] || { printf '%s\n' "$MSG_USAGE_WAIT" >&2; exit 2; }
   [[ -f "$NOTE" ]] || cmd_init >/dev/null
   ensure_schema
+  replace_section "Wait" "$text"
+  ok_write wait "$text"
+}
+
+cmd_status() {
+  local val="${1:-}"
+  local reason=""
+  # mn status --list | mn status list
+  if [[ "$val" == "--list" || "$val" == "list" || "$val" == "-l" ]]; then
+    local id g lab intent
+    while IFS= read -r id; do
+      [[ -z "$id" ]] && continue
+      g="$(_status_catalog glyph "$id")"
+      lab="$(_status_catalog label "$id")"
+      intent="$(_status_catalog intent "$id")"
+      printf '  %s %-14s  %s  [%s]\n' "$g" "$id" "$lab" "$intent"
+    done < <(_status_catalog list)
+    return 0
+  fi
+  # mn status blocked -- "reason"  OR  mn status blocked "reason…"
+  if [[ "$val" == "blocked" ]]; then
+    shift || true
+    if [[ "${1:-}" == "--" ]]; then
+      shift || true
+    fi
+    reason="$*"
+  else
+    shift || true
+  fi
+  [[ -n "$val" ]] || { printf '%s\n' "$MSG_USAGE_STATUS" >&2; exit 2; }
+  if [[ "$(_status_catalog valid "$val")" != "1" ]]; then
+    msg "$MSG_INVALID_STATE" "$val" >&2
+    printf '    valid: %s\n' "$VALID_STATUSES" >&2
+    printf '    (mn status --list)\n' >&2
+    exit 2
+  fi
+  val="$(_status_catalog canon "$val" | tr -d '\r')"
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  ensure_schema
+  local needs_wait
+  needs_wait="$(_status_catalog requires-wait "$val" | tr -d '\r')"
+  if [[ "$needs_wait" == "1" ]]; then
+    if [[ -z "$reason" ]]; then
+      local existing
+      existing="$(extract_section "Wait" 2>/dev/null | tr -d '[:space:]' || true)"
+      if [[ -z "$existing" ]]; then
+        printf '%s\n' "$MSG_STATUS_BLOCKED_NEEDS_WAIT" >&2
+        exit 2
+      fi
+    else
+      replace_section "Wait" "$reason"
+    fi
+  else
+    # Leaving requiresWait clears the wait reason
+    replace_section "Wait" ""
+  fi
   set_meta status "$val"
   touch_time
-  ok_write status "$val"
+  if [[ "$needs_wait" == "1" && -n "$reason" ]]; then
+    ok_write status "$val · $reason"
+  else
+    ok_write status "$val"
+  fi
 }
 
 cmd_human() {
@@ -529,7 +671,7 @@ cmd_check() {
   updated="$(printf '%s\n' "$meta" | sed -n '1p')"
   status="$(printf '%s\n' "$meta" | sed -n '2p')"
 
-  for h in Thread Description Now Validate Human Closed; do
+  for h in Thread Description Now Wait Validate Human Closed; do
     if ! grep -qx "## $h" "$NOTE"; then
       msg "$MSG_CHECK_HEADING" "$h"
       errs=1
@@ -539,7 +681,7 @@ cmd_check() {
   if [[ -z "$status" ]]; then
     printf '%s\n' "$MSG_CHECK_STATE_EMPTY"
     errs=1
-  elif ! [[ "$status" =~ ^($VALID_STATUSES)$ ]]; then
+  elif [[ "$(_status_catalog valid "$status")" != "1" ]]; then
     msg "$MSG_CHECK_STATE_INVALID" "$status"
     errs=1
   fi
@@ -549,6 +691,15 @@ cmd_check() {
   if [[ -z "$thread" ]]; then
     printf '%s\n' "$MSG_CHECK_THREAD_EMPTY"
     errs=1
+  fi
+
+  if [[ "$(_status_catalog requires-wait "$status")" == "1" ]]; then
+    local wait_body
+    wait_body="$(extract_section "Wait" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ -z "$wait_body" ]]; then
+      printf '%s\n' "$MSG_CHECK_WAIT_EMPTY"
+      errs=1
+    fi
   fi
 
   local val_body open_items has_placeholder
@@ -582,61 +733,118 @@ count_open_validate() {
     | grep -c . || true
 }
 
-_print_section_body() {
-  local name="$1" indent="$2"
-  local body line empty=1
+# Returns 0 if section has non-whitespace body (placeholder validate counts as empty).
+_section_nonempty() {
+  local name="$1"
+  local body line
   body="$(extract_section "$name" 2>/dev/null || true)"
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
-    empty=0
-    printf '%s%s\n' "$indent" "$line"
+    [[ "$line" =~ ^-[[:space:]]*$ ]] && continue
+    if [[ "$name" == "Validate" ]]; then
+      [[ "$line" == "- [ ] (nothing yet)" || "$line" == "- [ ] (nada ainda)" ]] && continue
+    fi
+    if [[ "$name" == "Closed" && "$line" == "-" ]]; then
+      continue
+    fi
+    return 0
   done <<<"$body"
-  if [[ $empty -eq 1 ]]; then
-    printf '%s%s%s%s\n' "$indent" "$C_DIM" "$MSG_EMPTY" "$C_RESET"
+  return 1
+}
+
+# Short block: icon + colored label + body. Prints nothing if empty.
+# Pass required=1 as 7th arg to always print (Thread) — empty body → dim hint.
+_print_short_block() {
+  local name="$1" label="$2" icon="$3" color="$4" indent="${5:-     }"
+  local body_color="${6:-$C_RESET}" required="${7:-0}"
+  local body line has=0
+  if _section_nonempty "$name"; then
+    has=1
+  elif [[ "$required" != "1" ]]; then
+    return 0
+  fi
+  body="$(extract_section "$name" 2>/dev/null || true)"
+  printf '  %s%s %s%s\n' "$color" "$icon" "$label" "$C_RESET"
+  if [[ $has -eq 1 ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
+      printf '%s%s%s%s\n' "$indent" "$body_color" "$line" "$C_RESET"
+    done <<<"$body"
+  else
+    # Required but empty — keep card from going blank (not a generic "(empty)")
+    printf '%s%sset with t%s\n' "$indent" "$C_DIM" "$C_RESET"
+  fi
+  # Optional 8th arg: skip trailing blank so a continuation (e.g. details) can sit flush.
+  if [[ "${8:-0}" != "1" ]]; then
+    printf '\n'
   fi
 }
 
-_print_validate() {
-  local body line empty=1 t
-  body="$(extract_section "Validate" 2>/dev/null || true)"
+# Details: muted body only, same indent as thread body — no blank line above.
+# Call right after thread with trailing-blank suppressed so it sits flush.
+_print_details_block() {
+  local body line
+  _section_nonempty "Description" || return 0
+  body="$(extract_section "Description" 2>/dev/null || true)"
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
-    empty=0
+    printf '     %s%s%s\n' "$C_DIM" "$line" "$C_RESET"
+  done <<<"$body"
+  printf '\n'
+}
+
+_print_validate() {
+  local body line t open_n=0
+  _section_nonempty "Validate" || return 0
+  body="$(extract_section "Validate" 2>/dev/null || true)"
+  # count open for badge on label
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == "- [ ] "* ]] || continue
+    t="$(printf '%s\n' "$line" | sed -E 's/^- \[ \] //')"
+    [[ "$t" == "(nothing yet)" || "$t" == "(nada ainda)" ]] && continue
+    open_n=$((open_n + 1))
+  done <<<"$body"
+
+  local vcolor="$C_GREEN"
+  local status
+  status="$(get_meta | sed -n '2p')"
+  [[ "$status" == "ready" || "$status" == "blocked" ]] && vcolor="$C_BOLD$C_GREEN"
+  if [[ "$open_n" -gt 0 ]]; then
+    printf '  %s%s validate%s %s· %s open%s\n' "$vcolor" "$SYM_VALIDATE" "$C_RESET" "$C_DIM" "$open_n" "$C_RESET"
+  else
+    printf '  %s%s validate%s\n' "$vcolor" "$SYM_VALIDATE" "$C_RESET"
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
     if [[ "$line" == "- [x] "* || "$line" == "- [X] "* ]]; then
       t="$(printf '%s\n' "$line" | sed -E 's/^- \[[xX]\] //')"
       printf '     %s%s  %s%s\n' "$C_DIM" "$SYM_DONE" "$t" "$C_RESET"
     elif [[ "$line" == "- [ ] "* ]]; then
       t="$(printf '%s\n' "$line" | sed -E 's/^- \[ \] //')"
-      if [[ "$t" == "(nothing yet)" ]]; then
-        printf '     %s%s  %s%s\n' "$C_DIM" "$SYM_OPEN" "$t" "$C_RESET"
-      else
-        printf '     %s%s  %s%s\n' "$C_GREEN" "$SYM_OPEN" "$t" "$C_RESET"
-      fi
+      [[ "$t" == "(nothing yet)" || "$t" == "(nada ainda)" ]] && continue
+      printf '     %s%s  %s%s\n' "$C_GREEN" "$SYM_OPEN" "$t" "$C_RESET"
     else
       printf '     %s\n' "$line"
     fi
   done <<<"$body"
-  if [[ $empty -eq 1 ]]; then
-    printf '     %s%s%s\n' "$C_DIM" "$MSG_EMPTY" "$C_RESET"
-  fi
+  printf '\n'
 }
 
 _print_closed() {
-  local body line empty=1
+  local body line
+  _section_nonempty "Closed" || return 0
   body="$(extract_section "Closed" 2>/dev/null || true)"
+  printf '  %s%s closed%s\n' "$C_DIM" "$SYM_CLOSED" "$C_RESET"
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
     [[ "$line" =~ ^-[[:space:]]*$ ]] && continue
-    empty=0
     if [[ "$line" == "- "* ]]; then
       printf '     %s%s %s%s\n' "$C_DIM" "$SYM_BULLET" "${line#- }" "$C_RESET"
     else
       printf '     %s%s%s\n' "$C_DIM" "$line" "$C_RESET"
     fi
   done <<<"$body"
-  if [[ $empty -eq 1 ]]; then
-    printf '     %s%s%s\n' "$C_DIM" "$MSG_DASH" "$C_RESET"
-  fi
+  printf '\n'
 }
 
 _show_missing() {
@@ -650,20 +858,46 @@ _show_card() {
   status="$(printf '%s\n' "$meta" | sed -n '2p')"
   [[ -z "$status" ]] && status="?"
 
-  local sym color open_n badge=""
+  local sym color open_n badge="" intent
+  sym="$(_status_catalog glyph "$status" | tr -d '\r')"
+  intent="$(_status_catalog intent "$status" | tr -d '\r')"
+  case "$intent" in
+    act)
+      if [[ "$status" == "blocked" || "$(_status_catalog requires-wait "$status")" == "1" ]]; then
+        color="$C_RED"
+      elif [[ "$status" == "ready" ]]; then
+        color="$C_GREEN"
+      else
+        color="$C_YELLOW"
+      fi
+      ;;
+    *) color="$C_DIM" ;;
+  esac
+  # busy coding-like stages stand out a bit
   case "$status" in
-    idle)    sym="$SYM_IDLE";    color="$C_DIM" ;;
-    working) sym="$SYM_WORKING"; color="$C_YELLOW" ;;
-    blocked) sym="$SYM_BLOCKED"; color="$C_RED" ;;
-    ready)   sym="$SYM_READY";   color="$C_GREEN" ;;
-    *)       sym="?";            color="$C_DIM" ;;
+    coding|designing|planning|working) color="$C_YELLOW" ;;
+  esac
+  [[ -z "$sym" || "$sym" == "?" ]] && case "$status" in
+    idle) sym="$SYM_IDLE" ;; working|coding) sym="$SYM_WORKING" ;;
+    blocked) sym="$SYM_BLOCKED" ;; ready) sym="$SYM_READY" ;;
   esac
 
   open_n="$(count_open_validate)"
+  local wait_text="" badge_cat
+  badge_cat="$(_status_catalog badge "$status" | tr -d '\r')"
+  if [[ "$(_status_catalog requires-wait "$status")" == "1" ]]; then
+    wait_text="$(extract_section "Wait" 2>/dev/null | sed -e '/^[[:space:]]*$/d' | head -1 || true)"
+  fi
   if [[ "$status" == "ready" && "$open_n" -gt 0 ]]; then
     badge="  ${C_GREEN}$(msg "$MSG_TO_VALIDATE" "$open_n")${C_RESET}"
-  elif [[ "$status" == "blocked" ]]; then
-    badge="  ${C_RED}${MSG_NEEDS_YOU}${C_RESET}"
+  elif [[ "$(_status_catalog requires-wait "$status")" == "1" ]]; then
+    if [[ -n "$wait_text" ]]; then
+      badge="  ${C_RED}${badge_cat:-$MSG_NEEDS_YOU} · ${wait_text}${C_RESET}"
+    else
+      badge="  ${C_RED}${badge_cat:-$MSG_NEEDS_YOU} · set: mn wait \"…\"${C_RESET}"
+    fi
+  elif [[ -n "$badge_cat" && "$intent" == "act" ]]; then
+    badge="  ${C_YELLOW}${badge_cat}${C_RESET}"
   fi
 
   local short_path
@@ -676,24 +910,30 @@ _show_card() {
     "${updated:---}" \
     "$C_DIM" "$C_RESET" \
     "$C_DIM" "$short_path" "$C_RESET"
-  printf '%s\n' "$badge"
+  if [[ -n "$badge" ]]; then
+    printf '%s\n' "$badge"
+  fi
   printf '\n'
 
-  printf '  %s%s Thread%s\n' "$C_CYAN" "$SYM_THREAD" "$C_RESET"
-  _print_section_body "Thread" "     "
-  printf '  %s%s Description%s\n' "$C_CYAN" "$SYM_DESC" "$C_RESET"
-  _print_section_body "Description" "     "
-  printf '  %s%s Now%s\n' "$C_WHITE" "$SYM_NOW" "$C_RESET"
-  _print_section_body "Now" "     "
-  local vcolor="$C_GREEN"
-  [[ "$status" == "ready" || "$status" == "blocked" ]] && vcolor="$C_BOLD$C_GREEN"
-  printf '  %s%s Validate%s\n' "$vcolor" "$SYM_VALIDATE" "$C_RESET"
+  # Blocked-on first when status requires wait — answers "what stops this stream".
+  if [[ "$(_status_catalog requires-wait "$status")" == "1" ]]; then
+    _print_short_block "Wait" "$MSG_BLOCKED_ON" "!" "$C_RED" "     " "$C_WHITE" 1
+  fi
+
+  # Thread is always shown (required). Other blocks omit when empty.
+  # If details exist, suppress thread's trailing blank so description sits flush under body
+  # (same relation as now-content under the "now" title).
+  if _section_nonempty "Description"; then
+    _print_short_block "Thread" "thread" "$SYM_THREAD" "$C_CYAN" "     " "$C_WHITE" 1 1
+  else
+    _print_short_block "Thread" "thread" "$SYM_THREAD" "$C_CYAN" "     " "$C_WHITE" 1
+  fi
+  # Details (Description on disk): muted, no icon — continuation of thread
+  _print_details_block
+  _print_short_block "Now" "now" "$SYM_NOW" "$C_YELLOW" "     " "$C_WHITE"
   _print_validate
-  printf '  %s%s Human%s\n' "$C_MAGENTA" "$SYM_HUMAN" "$C_RESET"
-  _print_section_body "Human" "     "
-  printf '  %s%s Closed%s\n' "$C_DIM" "$SYM_CLOSED" "$C_RESET"
+  _print_short_block "Human" "human" "$SYM_HUMAN" "$C_MAGENTA" "     " "$C_DIM"
   _print_closed
-  printf '\n'
 }
 
 cmd_show() {
@@ -754,8 +994,11 @@ Write (quiet — one-line ok; use TUI or mn show for the card)
   mn thread <text>
   mn description [--append] <text>
   mn now <text>
+  mn wait <text>              what is blocking (required when blocked)
   mn validate <text>
-  mn status <idle|working|blocked|ready>
+  mn status <id>              set status (catalog: ai-dev pack)
+  mn status --list            list statuses (glyph · id · label · intent)
+  mn status blocked -- <reason>   set blocked + wait in one shot
   mn human [--replace] <text>
   mn close <text>
   mn done [n|text]
@@ -763,8 +1006,14 @@ Write (quiet — one-line ok; use TUI or mn show for the card)
   mn touch
   mn +            interactive menu
 
+Statuses (default pack: ai-dev)
+  idle  designing  await-design  planning  review-plan
+  coding  review-code  blocked  ready
+  (alias: working → coding)
+  override: ~/.config/mn/statuses.json  or  MN_STATUSES=path
+
 Shortcuts
-  t→thread  d→description  n→now  v→validate  s→status  h→human  c→close
+  t→thread  d→description  n→now  w→wait  v→validate  s→status  h→human  c→close
 
 Env
   MN_FILE  MN_COLOR=0  NO_COLOR  MN_ASCII=1  MN_WATCH_INTERVAL
@@ -868,6 +1117,7 @@ cmd_menu() {
     "$MSG_MENU_DESCRIPTION"
     "$MSG_MENU_NOW"
     "$MSG_MENU_STATUS"
+    "$MSG_MENU_WAIT"
     "$MSG_MENU_HUMAN"
     "$MSG_MENU_CLOSE"
     "$MSG_MENU_DONE"
@@ -916,11 +1166,23 @@ cmd_menu() {
     status*)
       local est
       if command -v fzf >/dev/null 2>&1 && [[ -t 0 ]]; then
-        est="$(printf '%s\n' idle working blocked ready | fzf --prompt="$MSG_FZF_STATUS" --height=20% --reverse || true)"
+        est="$(_status_catalog list | fzf --prompt="$MSG_FZF_STATUS" --height=40% --reverse || true)"
       else
+        _status_catalog list | nl -ba
         printf '%s' "$MSG_PROMPT_STATUS"; read -r est
       fi
-      [[ -n "$est" ]] && cmd_status "$est"
+      if [[ -n "$est" ]]; then
+        if [[ "$(_status_catalog requires-wait "$est")" == "1" ]]; then
+          printf '%s' "$MSG_PROMPT_WAIT"; read -r text
+          [[ -n "$text" ]] && cmd_status "$est" -- "$text"
+        else
+          cmd_status "$est"
+        fi
+      fi
+      ;;
+    wait*|*"blocking"*)
+      printf '%s' "$MSG_PROMPT_WAIT"; read -r text
+      [[ -n "$text" ]] && cmd_wait "$text"
       ;;
     human*|*"my note"*)
       printf '%s' "$MSG_PROMPT_HUMAN"; read -r text
@@ -968,6 +1230,7 @@ main() {
     t) cmd="thread" ;;
     d) cmd="description" ;;
     n) cmd="now" ;;
+    w) cmd="wait" ;;
     v) cmd="validate" ;;
     s) cmd="status" ;;
     h) cmd="human" ;;
@@ -987,6 +1250,7 @@ main() {
     thread)          cmd_thread "$@" ;;
     description|desc|context) cmd_description "$@" ;;
     now)             cmd_now "$@" ;;
+    wait|blocked-on) cmd_wait "$@" ;;
     validate)        cmd_validate "$@" ;;
     status)          cmd_status "$@" ;;
     human)           cmd_human "$@" ;;

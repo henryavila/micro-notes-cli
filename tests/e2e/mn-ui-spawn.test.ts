@@ -31,7 +31,7 @@ describe('e2e: real process boot', () => {
     const w = writeTempNote(dir, {
       thread: 'e2e-thread-xyz',
       now: 'e2e-now-xyz',
-      status: 'working',
+      status: 'coding',
       description: 'e2e-desc',
       validate: [{ text: 'e2e-val', done: false }],
     });
@@ -91,6 +91,6 @@ describe('e2e: real process boot', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('e2e-thread-xyz');
     expect(r.stdout).toContain('e2e-now-xyz');
-    expect(r.stdout).toMatch(/working/i);
+    expect(r.stdout).toMatch(/coding/i);
   });
 });

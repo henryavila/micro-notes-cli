@@ -71,11 +71,24 @@ describe('mn CLI (real process)', () => {
     expect(bad.status).toBe(2);
     expect(bad.stdout + bad.stderr).toMatch(/invalid status/i);
 
-    for (const s of ['idle', 'working', 'blocked', 'ready'] as const) {
+    for (const s of ['idle', 'coding', 'ready', 'review-plan', 'review-code'] as const) {
       const r = runMn(['status', s], env());
       expect(r.status, s).toBe(0);
       expect(readFileSync(MN_FILE, 'utf8')).toMatch(new RegExp(`^status: ${s}$`, 'm'));
     }
+    // legacy alias working → coding
+    expect(runMn(['status', 'working'], env()).status).toBe(0);
+    expect(readFileSync(MN_FILE, 'utf8')).toMatch(/^status: coding$/m);
+    // blocked requires an explicit reason
+    const blocked = runMn(['status', 'blocked', '--', 'need decision'], env());
+    expect(blocked.status).toBe(0);
+    expect(readFileSync(MN_FILE, 'utf8')).toMatch(/^status: blocked$/m);
+    expect(readFileSync(MN_FILE, 'utf8')).toContain('need decision');
+    // status --list shows pack
+    const list = runMn(['status', '--list'], env());
+    expect(list.status).toBe(0);
+    expect(list.stdout).toMatch(/review-plan/);
+    expect(list.stdout).toMatch(/review-code/);
   });
 
   it('check fails on empty thread and passes after fill', () => {
@@ -105,11 +118,22 @@ describe('mn CLI (real process)', () => {
     expect(show2.stdout).toMatch(/1 to validate|to validate/);
   });
 
-  it('blocked badge says needs you', () => {
+  it('blocked without reason fails; with reason shows needs you + text', () => {
     runMn(['init'], env());
     runMn(['thread', 't'], env());
-    runMn(['status', 'blocked'], env());
-    expect(runMn(['show'], env()).stdout).toMatch(/needs you/);
+    const bare = runMn(['status', 'blocked'], env());
+    expect(bare.status).not.toBe(0);
+    const set = runMn(['status', 'blocked', '--', 'cutover vs dual-write'], env());
+    expect(set.status).toBe(0);
+    const show = runMn(['show'], env());
+    expect(show.stdout).toMatch(/needs you/);
+    expect(show.stdout).toMatch(/cutover vs dual-write/);
+    expect(show.stdout).toMatch(/blocked on/i);
+    // leaving blocked clears Wait
+    expect(runMn(['status', 'coding'], env()).status).toBe(0);
+    const body = readFileSync(MN_FILE, 'utf8');
+    expect(body).toMatch(/status: coding/);
+    expect(body).not.toMatch(/cutover vs dual-write/);
   });
 
   it('done marks first open; clear-validate restores placeholder', () => {
@@ -166,7 +190,7 @@ describe('mn CLI (real process)', () => {
     const note = parseNote(readFileSync(MN_FILE, 'utf8'));
     expect(note.thread).toBe('cross-stack');
     expect(note.now).toBe('parity');
-    expect(note.status).toBe('working');
+    expect(note.status).toBe('coding'); // working alias is written as coding
     expect(note.validate).toEqual([{ text: 'item-a', done: false }]);
     expect(note.human).toBe('note');
     expect(note.closed).toEqual(['decision']);

@@ -5,6 +5,10 @@ import {
   serializeNote,
   emptyNote,
   statusToIntent,
+  statusGlyph,
+  statusTitle,
+  blockedNeedsWait,
+  withStatus,
   openValidateCount,
   PLACEHOLDER_VALIDATE,
   notePath,
@@ -38,13 +42,48 @@ describe('parseNote', () => {
     expect(p.human).toBe('do not touch billing');
     expect(p.closed).toEqual(['dropped Stripe']);
     expect(raw).toContain('## Thread');
+    expect(raw).toContain('## Wait');
     expect(raw).toContain('- [ ] npm test');
     expect(raw).toContain('- [x] retry');
   });
 
+  it('round-trips Wait when blocked and clears Wait when not blocked', () => {
+    const n = emptyNote();
+    n.thread = 't';
+    n.status = 'blocked';
+    n.wait = 'cutover now vs dual-write?';
+    const raw = serializeNote(n);
+    expect(raw).toContain('## Wait');
+    expect(raw).toContain('cutover now vs dual-write?');
+    expect(parseNote(raw).wait).toBe('cutover now vs dual-write?');
+
+    n.status = 'working';
+    // serialize drops wait body when not blocked
+    const unblocked = serializeNote(n);
+    expect(parseNote(unblocked).wait).toBe('');
+    expect(unblocked).toMatch(/## Wait\n\n/);
+  });
+
+  it('blockedNeedsWait / withStatus enforce the blocked-on rule', () => {
+    const n = emptyNote();
+    n.status = 'blocked';
+    n.wait = '';
+    expect(blockedNeedsWait(n)).toBe(true);
+    n.wait = 'need decision on API shape';
+    expect(blockedNeedsWait(n)).toBe(false);
+
+    const left = withStatus({ ...n, wait: 'x' }, 'working');
+    expect(left.status).toBe('working');
+    expect(left.wait).toBe('');
+
+    const entered = withStatus(emptyNote(), 'blocked');
+    expect(entered.status).toBe('blocked');
+    expect(blockedNeedsWait(entered)).toBe(true);
+  });
+
   it('drops EN and PT validate placeholders', () => {
     expect(parseNote(serializeNote(emptyNote())).validate).toEqual([]);
-    const en = `# microNote\nupdated: 10:00\nstatus: idle\n\n## Thread\n\n## Description\n\n## Now\n\n## Validate\n- [ ] ${PLACEHOLDER_VALIDATE}\n\n## Human\n\n## Closed\n- \n`;
+    const en = `# microNote\nupdated: 10:00\nstatus: idle\n\n## Thread\n\n## Description\n\n## Now\n\n## Wait\n\n## Validate\n- [ ] ${PLACEHOLDER_VALIDATE}\n\n## Human\n\n## Closed\n- \n`;
     expect(parseNote(en).validate).toEqual([]);
     const pt = `# microNote\natualizado: 10:00\nestado: idle\n\n## Validar\n- [ ] (nada ainda)\n\n## Fechado\n- \n`;
     expect(parseNote(pt).validate).toEqual([]);
@@ -61,6 +100,8 @@ t
 ## Description
 
 ## Now
+
+## Wait
 
 ## Validate
 - [ ] ${PLACEHOLDER_VALIDATE}
@@ -239,12 +280,26 @@ describe('helpers', () => {
     expect(openValidateCount(n)).toBe(2);
   });
 
-  it('statusToIntent maps product statuses used by the TUI chrome', () => {
-    // Observable contract: ChoicePicker / list intents in App depend on this map.
+  it('statusToIntent maps catalog statuses used by the TUI chrome', () => {
     expect(statusToIntent('ready')).toBe('ok');
     expect(statusToIntent('blocked')).toBe('error');
-    expect(statusToIntent('working')).toBe('drift');
+    expect(statusToIntent('coding')).toBe('drift');
+    expect(statusToIntent('working')).toBe('drift'); // alias → coding
     expect(statusToIntent('idle')).toBe('pending');
-    expect(statusToIntent('unknown')).toBe('pending');
+    expect(statusToIntent('review-plan')).toBe('warn');
+    expect(statusToIntent('review-code')).toBe('warn');
+  });
+
+  it('statusGlyph / statusTitle put a mark in the pane title (ai-dev pack)', () => {
+    expect(statusGlyph('idle')).toBe('○');
+    expect(statusGlyph('coding')).toBe('◉');
+    expect(statusGlyph('working')).toBe('◉'); // alias
+    expect(statusGlyph('blocked')).toBe('!');
+    expect(statusGlyph('ready')).toBe('►');
+    expect(statusGlyph('review-plan')).toBe('▣');
+    expect(statusGlyph('review-code')).toBe('◐');
+    expect(statusTitle('coding')).toBe('◉ coding');
+    expect(statusTitle('blocked')).toBe('! blocked');
+    expect(statusTitle('review-plan')).toBe('▣ review plan');
   });
 });
