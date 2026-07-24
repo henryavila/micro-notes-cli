@@ -1,6 +1,6 @@
 {
   "name": "micro-notes-cli",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "private": true,
   "description": "microNote CLI + blink TUI — human re-entry card",
   "type": "module",
@@ -18,7 +18,7 @@
     "postinstall": "node scripts/check-react-singleton.mjs"
   },
   "dependencies": {
-    "@henryavila/blink-tui": "file:../blink-tui",
+    "@henryavila/blink-tui": "^0.2.2",
     "ink": "^5.1.0",
     "react": "^18.3.1"
   },

@@ -31,7 +31,8 @@
 - Copia packs + `status-catalog.mjs` para `~/.local/share/mn`.
 - Catálogo resolve packs via `MN_ROOT` / `root=` / share / repo.
 
-## Fora do repo
+## Dependências / release
 
-- Alterações ao Footer multi-row vivem em `../blink-tui` (não neste git).
+- `@henryavila/blink-tui@^0.2.2` no npm (não `file:../blink-tui`).
+- App **v1.0.0** — SCHEMA v0.1 surface estável.
 - Não commitar: `MICRONOTE.md` local, `cfg-status/`.

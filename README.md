@@ -1,13 +1,31 @@
 # micro-notes-cli
 
-**microNote** — human re-entry card for multi-agent / multi-worktree work (Herdr side panes).
+**microNote v1.0** — human re-entry card for multi-agent / multi-worktree work.
 
-- **CLI** (`bin/mn`) — agents & scripts: quiet writes, `check`, one-shot `show`
-- **TUI** (`mn` / `mn ui`) — blink + Ink live card (no terminal pollution)
+Jump back into a stream in seconds: **which work?** · **what’s now?** · **must I act?** · **on what?**
 
-Language: **English only** for now (file format + commands + UI). pt-BR later.
+| Surface | Role |
+|---------|------|
+| **CLI** (`bin/mn`) | Agents & scripts — quiet writes, `check`, one-shot `show` |
+| **TUI** (`mn` / `mn ui`) | Live blink + Ink card (no terminal pollution) |
 
-**Status packs** (choose one built-in set; optional personal overlay):
+Language: **English only** for the file format, commands, and UI (pt-BR later).
+
+### What’s in 1.0
+
+- SCHEMA v0.1 card: **Thread · Description · Now · Wait · Todo · Finished**
+- **Status packs** — `generic` (default) or `ai-dev`, sticky via `pack=` / installer
+- Custom status overlay (`mn status init` / `edit`)
+- **Wait** required when status needs it (`blocked`)
+- blink TUI with full catalog, clear menu, pack picker (`,`)
+- Footer: **2 bars** on narrow terminals, **column-aligned** chips (`@henryavila/blink-tui` ≥ 0.2.2)
+- Installer: PATH, sticky pack, share-dir assets
+
+---
+
+## Status packs
+
+Choose one built-in set (optional personal overlay on top):
 
 | Pack | Statuses | When |
 |------|----------|------|
@@ -28,12 +46,16 @@ mn status pack ai-dev
 ```bash
 cd /path/to/micro-notes-cli
 ./install.sh --link          # symlink ~/.local/bin/mn → repo (dev; live updates)
-npm install                  # TUI deps (blink-tui, ink, react)
+npm install                  # TUI deps (blink-tui from npm, ink, react)
 ```
 
-Requires **Node ≥ 18** for the TUI and for `scripts/status-catalog.mjs` (status list / glyphs). Pure bash card still works; catalog falls back to a static list if Node is missing.
+Requires **Node ≥ 18** for the TUI and for `scripts/status-catalog.mjs`. Pure bash card still works; catalog falls back to a static list if Node is missing.
 
 Ensure `~/.local/bin` is on `PATH` (the installer can write a shell rc block).
+
+```bash
+mn --version                 # 1.0.0
+```
 
 ## Quickstart
 
@@ -98,20 +120,22 @@ mn status show              # which file is active + paths
 
 | Command | What it does |
 |---------|----------------|
-| `mn status init` | Create `~/.config/mn/statuses.json` from the shipped ai-dev pack |
+| `mn status init` | Create `~/.config/mn/statuses.json` from the shipped base pack |
 | `mn status init --force` | Overwrite user pack with the default again |
 | `mn status edit` | Open the user pack in `$EDITOR` / `$VISUAL` / `vi` |
 | `mn status show` | Active source path + effective list |
 | `mn status help` | Full catalog help |
+| `mn status pack list` | Built-in packs (`*` = active) |
+| `mn status pack <id>` | Switch built-in pack (`generic` \| `ai-dev`) |
 
-**Resolution order** (first hit wins):
+**Resolution order** (first hit wins for *status definitions*):
 
 1. `$MN_STATUSES` (path to a JSON file)
 2. `statuses=` in `~/.config/mn/config`
-3. `~/.config/mn/statuses.json`
-4. `schemas/statuses.default.json` (shipped ai-dev pack)
+3. `~/.config/mn/statuses.json` (user overlay / full pack)
+4. Built-in pack from `pack=` / `$MN_PACK` (default: **generic**)
 
-**JSON shape** (same as the default file):
+**JSON shape** (same as the shipped packs):
 
 ```json
 {
@@ -140,7 +164,7 @@ Rules:
 | `order` | If present, **replaces** the full picker order |
 | `aliases` | Old id → canonical id (`working` → `coding`) |
 
-Partial override: you can keep only the statuses you change; the loader **deep-merges** by id onto the default. If you set `order`, list every id you want in the picker.
+Partial override: you can keep only the statuses you change; the loader **deep-merges** by id onto the base pack. If you set `order`, list every id you want in the picker.
 
 There is **no** freeform section schema yet (Thread/Now/Wait/… stay fixed). Personalization today is the **status catalog** only.
 
@@ -160,7 +184,7 @@ When status **requires wait** (`blocked`):
 | `t` | edit thread (short label) |
 | `d` | edit description (stream context) |
 | `n` | edit now |
-| `w` | blocked on (`## Wait` — required when blocked) |
+| `w` | blocked on (`## Wait` — shown when status requires wait) |
 | `v` | add todo item |
 | `s` | status picker (full catalog) |
 | `f` | finished (settled decision) |
@@ -168,6 +192,7 @@ When status **requires wait** (`blocked`):
 | `space` / `x` | toggle todo item |
 | backspace | remove focused todo item |
 | `c` | clear menu — done todos / all todos / now+wait / everything |
+| `,` | status pack settings (`generic` / `ai-dev`) |
 | `r` | reload file |
 | `i` | init file if missing |
 | `?` | help |
@@ -175,8 +200,8 @@ When status **requires wait** (`blocked`):
 
 **Clear menu (`c`):** pick what to wipe. *done todos* removes only checked items; *all todos* = `mn clear-todo`; *now + wait* clears activity; *everything* resets Description/Now/Wait/Todo/Finished + status→idle but **keeps Thread** (confirm with Enter).
 
-Footer chips (priority order): one bar when they fit; **second bar on narrow terminals** before any chip is dropped. Only if both bars overflow do chips drop from the right:  
-`t` `d` `n` `w`* `v` `s` `sp` `f` `c` `?` `q` — \*`w` only while blocked.
+**Footer chips** (priority order): one bar when they fit; **second bar on narrow terminals** with **column-aligned** chips (blink-tui `align="columns"`). Only if both bars still overflow do chips drop from the right:  
+`t` `d` `n` `w`* `v` `s` `sp` `f` `c` `,` `?` `q` — \*`w` only while status requires wait.
 
 **Removed from SCHEMA v0.1:** `h`/Human (and `## Validate` / `## Need` → `## Todo`). **Description is kept.**
 
@@ -201,7 +226,7 @@ optional longer stream context
 what is happening
 
 ## Wait
-what is blocking (required when status=blocked; cleared when unblocked)
+what is blocking (required when status requires wait; cleared when unblocked)
 
 ## Todo
 - [ ] (nothing yet)
@@ -217,7 +242,7 @@ Legacy files (`## Validate`, `## Human`, `## Closed`, PT headings) **migrate on 
 | **Thread** | Short stream label (required for `mn check`) |
 | **Description** | Optional longer context for the stream |
 | **Now** | Current activity |
-| **Wait** | What is blocking — required when `blocked` |
+| **Wait** | What is blocking — required when status requires wait |
 | **Todo** | Verify/decide checklist |
 | **Finished** | Settled decisions |
 
@@ -241,15 +266,18 @@ Legacy files (`## Validate`, `## Human`, `## Closed`, PT headings) **migrate on 
 | `mn status show` | active pack path + list |
 | `mn status init [--force]` | scaffold user `statuses.json` |
 | `mn status edit` | open user pack in `$EDITOR` |
+| `mn status pack list` | list built-in packs |
+| `mn status pack <id>` | switch built-in pack |
 | `mn status help` | catalog + custom pack docs |
 | `mn status blocked -- "reason"` | blocked + Wait in one shot |
 | `mn finish "…"` | settled decision (alias: `close`) |
 | `mn done [n\|text]` | mark todo done |
 | `mn clear-todo` | reset Todo checklist |
-| `mn check` | structure gate (exit 0/1; enforces Wait when blocked) |
+| `mn check` | structure gate (exit 0/1; enforces Wait when required) |
 | `mn path` | print path |
 | `mn +` | interactive menu |
 | `mn help` | help |
+| `mn --version` | print version |
 | `mn touch` | stamp `updated:` only |
 
 **CLI shortcuts:** `t` `d` `n` `w` `v` `s` `f`
@@ -264,6 +292,7 @@ Legacy files (`## Validate`, `## Human`, `## Closed`, PT headings) **migrate on 
 | `MN_ASCII=1` | ASCII symbols (CLI) |
 | `MN_WATCH_INTERVAL` | `mn watch` seconds |
 | `MN_STATUSES` | path to statuses JSON override |
+| `MN_PACK` | built-in pack id (`generic` \| `ai-dev`) |
 | `MN_CONFIG_DIR` | config dir (default `~/.config/mn`) |
 | `MN_ROOT` | repo root (TUI / catalog discovery) |
 | `MN_TUI_LAUNCHER` | path to `tui/bin/mn-ui.mjs` |
@@ -276,11 +305,12 @@ MICRONOTE.md
     │
     ├─ bin/mn                 bash CLI (agents, gates, quiet writes)
     │    scripts/status-catalog.mjs   Node bridge → status pack
-    │    schemas/statuses.default.json
+    │    schemas/packs/{generic,ai-dev}.json
     └─ tui/
          note.ts              parse/serialize (shared format + Wait)
          status-catalog.ts    load / merge / resolve statuses
          App.tsx              live card + keys + fs.watch
+         @henryavila/blink-tui  Footer (maxRows=2, column align), Pane, …
 ```
 
 ## Tests
@@ -297,3 +327,7 @@ npm run tui          # tsx tui/src/index.tsx
 npm run build:tui    # optional bundle → tui/dist
 mn status --list     # verify catalog after edits to schemas/
 ```
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
