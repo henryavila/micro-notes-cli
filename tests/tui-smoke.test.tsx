@@ -93,7 +93,7 @@ describe('TUI App loads MN_FILE content', () => {
     }
   });
 
-  it('long description wraps instead of truncating with ellipsis', () => {
+  it('long description field wraps instead of truncating with ellipsis', () => {
     // Distinct tokens so we can assert the full body is present even when
     // the terminal is narrow (ink-testing-library defaults ~80 cols).
     const head = 'WRAPHEAD_unique_prefix_alpha';
@@ -102,7 +102,7 @@ describe('TUI App loads MN_FILE content', () => {
     const longDesc = `${head} ${mid} ${tail}`;
     const { path } = writeTempNote(dir, {
       thread: 'wrap-thread',
-      now: longDesc,
+      description: longDesc,
       status: 'coding',
     });
     process.env.MN_FILE = path;
@@ -119,16 +119,18 @@ describe('TUI App loads MN_FILE content', () => {
     }
   });
 
-  it('long user fields (thread/now/wait/todo/finished) wrap fully — no ellipsis cut-off', () => {
+  it('long user fields (thread/description/now/wait/todo/finished) wrap fully — no ellipsis cut-off', () => {
     const long = (tag: string) =>
       `${tag}_HEAD_${'x'.repeat(90)}_${tag}_TAIL_unique`;
     const thread = long('THREAD');
+    const description = long('DESC');
     const now = long('NOW');
     const wait = long('WAIT');
     const todoItem = long('TODO');
     const finished = long('FINISHED');
     const { path } = writeTempNote(dir, {
       thread,
+      description,
       now,
       wait,
       status: 'blocked',
@@ -140,14 +142,14 @@ describe('TUI App loads MN_FILE content', () => {
     const { lastFrame, unmount } = render(<App />);
     try {
       const frame = lastFrame() ?? '';
-      for (const tag of ['THREAD', 'NOW', 'WAIT', 'TODO', 'FINISHED']) {
+      for (const tag of ['THREAD', 'DESC', 'NOW', 'WAIT', 'TODO', 'FINISHED']) {
         expect(frame).toContain(`${tag}_HEAD_`);
         expect(frame).toContain(`${tag}_TAIL_unique`);
         expect(frame).not.toMatch(new RegExp(`${tag}_HEAD_[^\\n]*…`));
       }
-      // SCHEMA v0.1: Human + Description removed from surface.
+      // SCHEMA v0.1: Human removed; Description is a first-class section.
       expect(frame.toLowerCase()).not.toMatch(/\bhuman\b/);
-      expect(frame.toLowerCase()).not.toMatch(/\bdescription\b/);
+      expect(frame.toLowerCase()).toMatch(/\bdescription\b/);
     } finally {
       unmount();
     }

@@ -30,10 +30,10 @@ describe('e2e: real process boot', () => {
     dir = makeTempDir('mn-e2e-');
     const w = writeTempNote(dir, {
       thread: 'e2e-thread-xyz',
+      description: 'e2e-desc',
       now: 'e2e-now-xyz',
       status: 'coding',
-      description: 'e2e-desc',
-      validate: [{ text: 'e2e-val', done: false }],
+      todo: [{ text: 'e2e-val', done: false }],
     });
     MN_FILE = w.path;
   });

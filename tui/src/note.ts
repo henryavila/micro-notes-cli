@@ -1,8 +1,8 @@
 /**
  * MICRONOTE.md parse / serialize — SCHEMA v0.1
  *
- * Canonical sections: Thread · Now · Wait · Todo · Finished
- * (Human + Description dropped; Validate/Need → Todo; Closed → Finished)
+ * Canonical sections: Thread · Description · Now · Wait · Todo · Finished
+ * (Human dropped; Validate/Need → Todo; Closed → Finished; Descricao → Description)
  *
  * Wait = what is blocking (required when status requiresWait; cleared when unblocked).
  */
@@ -37,10 +37,12 @@ export interface MicroNote {
   updated: string;
   status: NoteStatus | string;
   thread: string;
+  /** Longer stream context (optional prose). */
+  description: string;
   now: string;
   /** What is blocking — required when status requires wait (blocked). */
   wait: string;
-  /** Human verify/decide checklist (SCHEMA: Todo). */
+  /** Verify/decide checklist (SCHEMA: Todo). */
   todo: TodoItem[];
   /** Settled decisions (SCHEMA: Finished; legacy heading Closed). */
   finished: string[];
@@ -71,6 +73,7 @@ export function emptyNote(): MicroNote {
     updated: nowHm(),
     status: 'idle',
     thread: '',
+    description: '',
     now: '',
     wait: '',
     todo: [],
@@ -80,12 +83,14 @@ export function emptyNote(): MicroNote {
 
 /**
  * Map legacy headings to canonical SCHEMA ids.
- * Description / Human map to null (dropped — not written back).
+ * Human maps to null (dropped — not written back).
  */
 function normalizeHeading(h: string): string | null {
   const map: Record<string, string | null> = {
     Thread: 'Thread',
     Fio: 'Thread',
+    Description: 'Description',
+    Descricao: 'Description',
     Now: 'Now',
     Agora: 'Now',
     Wait: 'Wait',
@@ -99,8 +104,6 @@ function normalizeHeading(h: string): string | null {
     Closed: 'Finished', // legacy SCHEMA name
     Fechado: 'Finished',
     // Dropped from SCHEMA v0.1 — parse then discard
-    Description: null,
-    Descricao: null,
     Human: null,
     Humano: null,
   };
@@ -114,6 +117,7 @@ export function parseNote(raw: string): MicroNote {
   let section: string | null = null;
   const bodies: Record<string, string[]> = {
     Thread: [],
+    Description: [],
     Now: [],
     Wait: [],
     Todo: [],
@@ -145,7 +149,7 @@ export function parseNote(raw: string): MicroNote {
     if (section && section in bodies) {
       bodies[section].push(line);
     }
-    // Description / Human / unknown: ignored (not stored)
+    // Human / unknown: ignored (not stored)
   }
 
   const trimBody = (xs: string[]) =>
@@ -156,6 +160,7 @@ export function parseNote(raw: string): MicroNote {
       .trim();
 
   note.thread = trimBody(bodies.Thread ?? []);
+  note.description = trimBody(bodies.Description ?? []);
   note.now = trimBody(bodies.Now ?? []);
   note.wait = trimBody(bodies.Wait ?? []);
 
@@ -205,13 +210,15 @@ export function serializeNote(note: MicroNote): string {
   // When status does not require wait, do not persist a stale reason.
   const waitBody = statusRequiresWait(String(note.status || 'idle')) ? note.wait : '';
 
-  // SCHEMA v0.1 template: Thread · Now · Wait · Todo · Finished
+  // SCHEMA v0.1 template: Thread · Description · Now · Wait · Todo · Finished
   return [
     '# microNote',
     `updated: ${note.updated || nowHm()}`,
     `status: ${note.status || 'idle'}`,
     '',
     block('Thread', note.thread).trimEnd(),
+    '',
+    block('Description', note.description).trimEnd(),
     '',
     block('Now', note.now).trimEnd(),
     '',
@@ -326,13 +333,14 @@ export function clearActivity(note: MicroNote): MicroNote {
 }
 
 /**
- * Soft reset: empty Now, Wait, Todo, Finished; status → idle.
+ * Soft reset: empty Description, Now, Wait, Todo, Finished; status → idle.
  * Preserves Thread (stream identity).
  */
 export function clearSoft(note: MicroNote): MicroNote {
   return {
     ...note,
     status: 'idle',
+    description: '',
     now: '',
     wait: '',
     todo: [],

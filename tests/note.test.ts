@@ -30,9 +30,10 @@ process.env.MN_STATUSES_TEST_BUST = '1';
 resetStatusCatalogCache();
 
 describe('parseNote / serializeNote (SCHEMA v0.1)', () => {
-  it('round-trips a filled note (Thread · Now · Wait · Todo · Finished)', () => {
+  it('round-trips a filled note (Thread · Description · Now · Wait · Todo · Finished)', () => {
     const n = emptyNote();
     n.thread = 'paddle webhooks';
+    n.description = 'idempotency + dual-write context';
     n.now = 'writing tests';
     n.status = 'ready';
     n.todo = [
@@ -43,16 +44,17 @@ describe('parseNote / serializeNote (SCHEMA v0.1)', () => {
     const raw = serializeNote(n);
     const p = parseNote(raw);
     expect(p.thread).toBe('paddle webhooks');
+    expect(p.description).toBe('idempotency + dual-write context');
     expect(p.now).toBe('writing tests');
     expect(p.status).toBe('ready');
     expect(p.todo).toEqual(n.todo);
     expect(p.finished).toEqual(['dropped Stripe']);
     expect(raw).toContain('## Thread');
+    expect(raw).toContain('## Description');
     expect(raw).toContain('## Now');
     expect(raw).toContain('## Wait');
     expect(raw).toContain('## Todo');
     expect(raw).toContain('## Finished');
-    expect(raw).not.toContain('## Description');
     expect(raw).not.toContain('## Human');
     expect(raw).not.toContain('## Validate');
     expect(raw).toContain('- [ ] npm test');
@@ -153,7 +155,7 @@ second bare
     expect(p.finished).toEqual(['first', 'second bare']);
   });
 
-  it('migrates legacy PT headings; drops Description/Human bodies', () => {
+  it('migrates legacy PT headings; keeps Description, drops Human', () => {
     const raw = `# microNote
 atualizado: 10:00
 estado: working
@@ -180,18 +182,20 @@ note
     expect(p.updated).toBe('10:00');
     expect(p.status).toBe('working');
     expect(p.thread).toBe('old thread');
+    expect(p.description).toBe('old desc');
     expect(p.now).toBe('old now');
     expect(p.todo).toEqual([]);
     expect(p.finished).toEqual(['finished item']);
-    // Dropped sections must not reappear on write; Closed renames → Finished
+    // Human dropped; Descricao → Description; Closed → Finished
     const out = serializeNote(p);
-    expect(out).not.toContain('## Description');
+    expect(out).toContain('## Description');
+    expect(out).toContain('old desc');
     expect(out).not.toContain('## Human');
     expect(out).toContain('## Finished');
     expect(out).not.toContain('## Closed');
     expect(out).not.toContain('## Fechado');
-    expect(out).not.toContain('old desc');
     expect(out).not.toContain('## Humano');
+    expect(out).not.toContain('## Descricao');
   });
 
   it('parses CRLF the same as LF', () => {
@@ -248,12 +252,13 @@ describe('notePath / IO', () => {
       expect(n!.todo).toEqual([]);
       expect(readRaw(path)).toContain(`- [ ] ${PLACEHOLDER_TODO}`);
       expect(readRaw(path)).toContain('## Todo');
-      expect(readRaw(path)).not.toContain('## Description');
+      expect(readRaw(path)).toContain('## Description');
       expect(readRaw(path)).not.toContain('## Human');
 
       writeNoteFile(path, {
         ...n!,
         thread: 'from-ts',
+        description: 'context',
         now: 'io test',
         status: 'working',
         todo: [{ text: 'a', done: false }],
@@ -335,6 +340,7 @@ describe('helpers', () => {
   it('clearSoft resets body but keeps thread', () => {
     const n = emptyNote();
     n.thread = 'paddle';
+    n.description = 'long context';
     n.status = 'coding';
     n.now = 'tests';
     n.wait = 'ci';
@@ -343,6 +349,7 @@ describe('helpers', () => {
     const next = clearSoft(n);
     expect(next.thread).toBe('paddle');
     expect(next.status).toBe('idle');
+    expect(next.description).toBe('');
     expect(next.now).toBe('');
     expect(next.wait).toBe('');
     expect(next.todo).toEqual([]);

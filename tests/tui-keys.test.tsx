@@ -175,18 +175,32 @@ describe('TUI keys write the note file', () => {
     }
   });
 
-  it('d removes the focused todo item on disk', async () => {
+  it('backspace removes the focused todo item on disk', async () => {
     const { stdin, unmount } = render(<App />);
     try {
       await new Promise((r) => setTimeout(r, 60));
-      // focus is alpha (index 0)
-      await typeKeys(stdin, ['d']);
+      // focus is alpha (index 0); d is description — delete via backspace
+      await typeKeys(stdin, ['\x7f']);
       await waitFor(() => {
         const n = parseNote(readFileSync(path, 'utf8'));
         return n.todo.length === 1 && n.todo[0]?.text === 'beta';
       });
       const n = parseNote(readFileSync(path, 'utf8'));
       expect(n.todo.map((x) => x.text)).toEqual(['beta']);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('d + edit + enter updates description on disk', async () => {
+    const { stdin, unmount } = render(<App />);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      await typeKeys(stdin, ['d'], 40);
+      await typeKeys(stdin, 'from-desc-key'.split(''), 20);
+      await typeKeys(stdin, ['\r'], 40);
+      await waitFor(() => parseNote(readFileSync(path, 'utf8')).description === 'from-desc-key');
+      expect(parseNote(readFileSync(path, 'utf8')).description).toBe('from-desc-key');
     } finally {
       unmount();
     }
@@ -211,6 +225,7 @@ describe('TUI keys write the note file', () => {
     // richer starting note
     const w = writeTempNote(dir, {
       thread: 'keep-me',
+      description: 'context to clear',
       now: 'busy',
       wait: 'someone',
       status: 'coding',
@@ -239,6 +254,7 @@ describe('TUI keys write the note file', () => {
       const n = parseNote(readFileSync(path, 'utf8'));
       expect(n.thread).toBe('keep-me');
       expect(n.status).toBe('idle');
+      expect(n.description).toBe('');
       expect(n.now).toBe('');
       expect(n.wait).toBe('');
       expect(n.todo).toEqual([]);

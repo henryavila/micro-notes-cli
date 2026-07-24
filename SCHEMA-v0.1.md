@@ -43,9 +43,11 @@ Topics ranked for multi-agent re-entry (30 min away):
 | 9 | Collision / ownership | optional later | Multi-agent only |
 | 10 | Freshness | **updated** meta | Always |
 
-**Anti-topics (never sections):** Human, Description-as-essay, History/Log, Diff/files, Agent todos, Chat summary, Commit SHAs, long plans.
+**Anti-topics (never sections):** Human, History/Log, Diff/files, Agent todos, Chat summary, Commit SHAs, long plans as default.
 
-**Live signal:** existing cards fill Thread + Now and leave Description / Human / Finished empty → drop dead weight.
+**Description:** optional stream context (kept). Prefer short Thread for glance; Description for re-entry context when Thread is not enough.
+
+**Live signal:** Human was empty dead weight → dropped. Description returns as optional prose.
 
 ---
 
@@ -60,6 +62,9 @@ status: idle|working|blocked|ready
 
 ## Thread
 short label — stream identity
+
+## Description
+optional longer stream context
 
 ## Now
 one line: what is happening
@@ -92,6 +97,7 @@ one line: what is happening
 | ID | Heading | Type | Write mode | Required for `check` | Answers |
 |----|---------|------|------------|----------------------|---------|
 | `thread` | Thread | prose (single-line culture) | replace | yes (non-empty) | Q1 |
+| `description` | Description | prose (multi-line ok) | replace | heading present (body optional) | context for Q1 |
 | `now` | Now | prose (1–2 lines) | replace (never append) | no | Q2 |
 | `wait` | Wait | prose (single-line) | replace | when `status=blocked` | Q3/Q4 blocker |
 | `todo` | Todo | checklist | append / toggle done / clear | has placeholder or ≥1 item; when `ready` ≥1 open preferred | Q4 |
@@ -102,9 +108,10 @@ one line: what is happening
 | Field | Rule |
 |-------|------|
 | **Thread** | Label, not essay (~80 chars). e.g. `Paddle webhooks — idempotency` |
+| **Description** | Optional stream context. Overwrite. Hidden in UI when empty. |
 | **Now** | Present state only. **Overwrite always.** |
 | **Wait** | One sentence: what stream is waiting on. Clear when unblocked. |
-| **Todo** | Human verify/decide items only — not agent task graph. Cap ~7 open. |
+| **Todo** | Verify/decide items only — not agent task graph. Cap ~7 open. |
 | **Finished** | Settled decisions, one line each. No timestamps. (legacy heading: Closed) |
 
 ### Status ↔ body coupling (`mn check` later)
@@ -116,12 +123,12 @@ one line: what is happening
 | `blocked` | **Wait non-empty**; Todo = decisions/questions |
 | `ready` | Wait empty; **≥1 open Todo item** |
 
-### Removed vs previous draft
+### Removed / renamed vs previous draft
 
 | Old | Action |
 |-----|--------|
 | **Human** | **Delete** — tautology on a human-only card |
-| **Description** | **Delete from default** — diary-creep; long context lives in plan/PR/session |
+| **Description** | **Keep** — optional stream context (`mn description` / `d`) |
 | **Validate** | **Rename → Todo** (covers verify *and* decide under `blocked`) |
 
 ---
@@ -131,6 +138,7 @@ one line: what is happening
 | Command | Key | Effect |
 |---------|-----|--------|
 | `mn thread "…"` | `t` | replace Thread |
+| `mn description "…"` | `d` | replace Description (`desc` alias) |
 | `mn now "…"` | `n` | replace Now |
 | `mn wait "…"` | `w` | replace Wait |
 | `mn todo "…"` | `v` | append Todo checkbox (`e` alias) |
@@ -138,12 +146,12 @@ one line: what is happening
 | `mn status …` | `s` | set status |
 | `mn finish "…"` | `f` | append Finished (`close` alias) |
 | `mn clear-todo` | `c` → all todos | reset Todo placeholder |
-| — | `d` / backspace | remove focused Todo item |
+| — | backspace | remove focused Todo item |
 | — | `c` | clear menu: done / all todos / now+wait / everything (keep Thread) |
 
-**Removed:** `mn human`, `mn description`. Free key: `h`. Finished = `f`; Clear = `c`. `d` = delete focused todo.
+**Removed:** `mn human`. Free key: `h`. Finished = `f`; Clear = `c`. Description = `d`.
 
-**Aliases for muscle memory (optional):** `mn validate` → `todo`, `mn fio` legacy drop (EN-only).
+**Aliases for muscle memory (optional):** `mn validate` → `todo`, `mn desc` → `description` (EN-only).
 
 ---
 
@@ -199,6 +207,7 @@ Path resolution (later):
   },
   "sections": [
     { "id": "thread", "heading": "Thread", "type": "prose",     "required": true,  "cli": "thread", "key": "t", "mode": "replace" },
+    { "id": "description", "heading": "Description", "type": "prose", "required": false, "cli": "description", "key": "d", "mode": "replace" },
     { "id": "now",    "heading": "Now",    "type": "prose",     "required": false, "cli": "now",    "key": "n", "mode": "replace" },
     { "id": "wait",   "heading": "Wait",   "type": "prose",     "required": false, "cli": "wait",   "key": "w", "mode": "replace",
       "required_when_status": ["blocked"] },
@@ -260,7 +269,7 @@ Without SSOT, “custom schema” doubles CLI/TUI drift.
 
 | Work | Effort |
 |------|--------|
-| Default schema v0.1 only (drop Human/Description, add Wait, rename Todo) | Small–medium (one coherent break) |
+| Default schema v0.1 only (drop Human, keep Description, add Wait, rename Todo) | Small–medium (one coherent break) |
 | Internal `schemas/default.json` + loaders | Medium |
 | User override + install copy + validate | Medium (after SSOT) |
 | Freeform D/E | Large — defer |
@@ -273,9 +282,9 @@ Breaking is OK. Suggested one-shot rules if old files exist:
 
 | Old heading | Action |
 |-------------|--------|
-| Human | drop body (or append non-empty lines into Finished as decisions) |
+| Human | drop body |
 | Closed | rename → Finished |
-| Description | drop (or one-line into Thread if Thread empty) |
+| Description / Descricao | keep → Description |
 | Validate | rename → Todo |
 | Fio/Agora/… PT | drop PT migration long-term; one-shot map if still present |
 
@@ -340,7 +349,7 @@ Finished  —
 
 1. Lock answers in §8  
 2. Add `schemas/default.json` + rewrite template  
-3. Update `note.ts` parse/serialize + drop Human/Description; checklist = Todo  
+3. Update `note.ts` parse/serialize + drop Human (keep Description); checklist = Todo  
 4. Update `bin/mn` commands/check/show/menu  
 5. Update TUI keys + render  
 6. Rewrite tests  
@@ -351,5 +360,5 @@ Finished  —
 
 ## 10. One-line product + schema
 
-> **microNote v0.1** is a human sticky per worktree: **status + Thread + Now + Wait + Todo + Finished** — re-enter in seconds; agents may fill it, never own it.  
+> **microNote v0.1** is a human sticky per worktree: **status + Thread + Description + Now + Wait + Todo + Finished** — re-enter in seconds; agents may fill it, never own it.  
 > **Customization** is a validated profile over a fixed section catalog, not freeform markdown types.

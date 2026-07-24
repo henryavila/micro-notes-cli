@@ -64,12 +64,13 @@ const CLEAR_OPTIONS: Array<{ id: string; label: string; hint: string }> = [
   { id: 'cancel', label: 'cancel', hint: 'go back' },
 ];
 
-// SCHEMA v0.1 surface: Thread · Now · Wait · Todo · Finished
-// (no Human / Description — see SCHEMA-v0.1.md)
-type InputField = 'thread' | 'now' | 'wait' | 'finished' | 'todo';
+// SCHEMA v0.1 surface: Thread · Description · Now · Wait · Todo · Finished
+// (no Human — see SCHEMA-v0.1.md)
+type InputField = 'thread' | 'description' | 'now' | 'wait' | 'finished' | 'todo';
 
 const FIELD_TITLE: Record<InputField, string> = {
   thread: 'thread',
+  description: 'description',
   now: 'now',
   wait: 'blocked on',
   finished: 'finished',
@@ -449,6 +450,9 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       case 'thread':
         next.thread = value.trim();
         break;
+      case 'description':
+        next.description = value.trim();
+        break;
       case 'now':
         next.now = value.trim();
         break;
@@ -635,6 +639,10 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       openInput('thread', note.thread);
       return;
     }
+    if (input === 'd') {
+      openInput('description', note.description);
+      return;
+    }
     if (input === 'n') {
       openInput('now', note.now);
       return;
@@ -687,7 +695,8 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         save(next);
         return;
       }
-      if (input === 'd' || key.backspace || key.delete) {
+      // Delete focused todo: backspace/delete only (`d` is description).
+      if (key.backspace || key.delete) {
         const i = Math.min(focusTodo, note.todo.length - 1);
         save(removeTodo(note, i), 'removed');
       }
@@ -702,6 +711,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   //   = content cells available for children.
   const inputInnerW = Math.max(8, dialogW - 6);
   const threadLines = bodyLines(note.thread);
+  const descriptionLines = bodyLines(note.description);
   const nowLines = bodyLines(note.now);
   const hasTodo = note.todo.length > 0;
   const hasFinished = note.finished.length > 0;
@@ -713,6 +723,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         <Box flexDirection="column" marginTop={1}>
           {[
             't  thread (title)',
+            'd  description (stream context)',
             'n  now',
             'w  blocked on (required when blocked)',
             'v  add todo item',
@@ -721,7 +732,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
             'f  finished (settled decision)',
             'j/k or arrows  move todo focus',
             'space / x  toggle todo item',
-            'd / backspace  remove focused todo',
+            'backspace  remove focused todo',
             'c  clear menu (todos / now+wait / everything)',
             'r  reload file',
             'i  init file (if missing)',
@@ -753,7 +764,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
             width={dialogW}
           >
             <Text color={tokens.fg} wrap="wrap">
-              Resets Now, Wait, Todo, Finished and status→idle.
+              Resets Description, Now, Wait, Todo, Finished and status→idle.
             </Text>
             <Text color={tokens.fgDim} wrap="wrap">
               Thread is kept ({note.thread.trim() || 'empty'}).
@@ -979,6 +990,13 @@ function AppInner({ path }: { path: string }): React.ReactElement {
               hintColor={tokens.fgDim}
             />
             <ShortSection
+              icon="∷"
+              label="description"
+              color={tokens.fgMuted}
+              bodyColor={tokens.fg}
+              lines={descriptionLines}
+            />
+            <ShortSection
               icon="→"
               label="now"
               color={tokens.accentAlt}
@@ -1017,12 +1035,12 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         keys={[
           // Order = priority if still overflow past 2 rows.
           { k: 't', desc: 'thread' },
+          { k: 'd', desc: 'desc' },
           { k: 'n', desc: 'now' },
           ...(isBlocked ? ([{ k: 'w', desc: 'wait' }] as const) : []),
           { k: 'v', desc: 'todo' },
           { k: 's', desc: 'status' },
           { k: 'sp', desc: 'toggle' },
-          { k: 'd', desc: 'del' },
           { k: 'f', desc: 'finish' },
           { k: 'c', desc: 'clear' },
           { k: ',', desc: 'pack' },

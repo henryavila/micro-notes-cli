@@ -30,11 +30,11 @@ pass "lang inspect"
 grep -q '^updated:' "$MN_FILE" || fail "init missing updated:"
 grep -q '^status:' "$MN_FILE" || fail "init missing status:"
 grep -qx '## Thread' "$MN_FILE" || fail "init missing ## Thread"
+grep -qx '## Description' "$MN_FILE" || fail "init missing ## Description"
 grep -qx '## Now' "$MN_FILE" || fail "init missing ## Now"
 grep -qx '## Wait' "$MN_FILE" || fail "init missing ## Wait"
 grep -qx '## Todo' "$MN_FILE" || fail "init missing ## Todo"
 grep -qx '## Finished' "$MN_FILE" || fail "init missing ## Finished"
-if grep -qx '## Description' "$MN_FILE"; then fail "init must not have ## Description"; fi
 if grep -qx '## Human' "$MN_FILE"; then fail "init must not have ## Human"; fi
 if grep -qx '## Validate' "$MN_FILE"; then fail "init must not have ## Validate"; fi
 pass "init SCHEMA v0.1"
@@ -52,6 +52,7 @@ pass "check fails empty thread"
 # write fields (quiet one-line ok)
 out="$("$MN" thread "webhooks paddle")"
 printf '%s\n' "$out" | grep -q 'ok · thread' || fail "thread should be quiet ok (got: $out)"
+"$MN" description "paddle dual-write context" >/dev/null
 "$MN" now "writing tests" >/dev/null
 "$MN" todo "npm test -- webhook" >/dev/null
 "$MN" todo "retry does not duplicate" >/dev/null
@@ -63,6 +64,7 @@ pass "check after fill + quiet writes"
 
 out="$("$MN" show)"
 printf '%s\n' "$out" | grep -q "webhooks paddle" || fail "show missing thread"
+printf '%s\n' "$out" | grep -q "paddle dual-write" || fail "show missing description"
 printf '%s\n' "$out" | grep -q "npm test" || fail "show missing todo"
 printf '%s\n' "$out" | grep -q "ready" || fail "show missing status"
 printf '%s\n' "$out" | grep -qE "open todo|to validate" || fail "en badge missing"
@@ -86,6 +88,8 @@ pass "path"
 # shortcuts
 "$MN" t "new thread" >/dev/null
 grep -A2 '## Thread' "$MN_FILE" | grep -q 'new thread' || fail "shortcut t"
+"$MN" d "desc via d" >/dev/null
+grep -A2 '## Description' "$MN_FILE" | grep -q 'desc via d' || fail "shortcut d"
 "$MN" n "now text" >/dev/null
 grep -A2 '## Now' "$MN_FILE" | grep -q 'now text' || fail "shortcut n"
 "$MN" v "todo via v" >/dev/null
@@ -96,21 +100,20 @@ grep -A5 '## Finished' "$MN_FILE" | grep -q 'shipped via f' || fail "shortcut f�
 if "$MN" c "should fail" >/dev/null 2>&1; then
   fail "shortcut c should not map to finish"
 fi
-pass "shortcuts t/n/v/f"
+pass "shortcuts t/d/n/v/f"
 
 # version
 ver="$("$MN" --version)"
 [[ -n "$ver" ]] || fail "version empty"
 pass "version $ver"
 
-# removed commands must fail
+# Human removed; description must work
 if "$MN" human "nope" >/dev/null 2>&1; then
   fail "mn human should be removed"
 fi
-if "$MN" description "nope" >/dev/null 2>&1; then
-  fail "mn description should be removed"
-fi
-pass "human/description removed"
+out="$("$MN" description "restored desc")"
+printf '%s\n' "$out" | grep -q 'ok · description' || fail "mn description should work (got: $out)"
+pass "human removed; description ok"
 
 # blocked without reason must fail
 if "$MN" status blocked >/dev/null 2>&1; then
@@ -249,11 +252,13 @@ MN_FILE="$LEGACY" "$MN" show >/dev/null
 grep -q '^updated:' "$LEGACY" || fail "migrate updated"
 grep -q '^status:' "$LEGACY" || fail "migrate status"
 grep -qx '## Thread' "$LEGACY" || fail "migrate Thread"
+grep -qx '## Description' "$LEGACY" || fail "migrate Description heading"
 grep -qx '## Todo' "$LEGACY" || fail "migrate Todo"
 grep -A2 '## Thread' "$LEGACY" | grep -q 'old thread' || fail "migrate kept body"
-if grep -qx '## Description' "$LEGACY"; then fail "migrate should drop Description"; fi
+grep -A2 '## Description' "$LEGACY" | grep -q 'old desc' || fail "migrate kept Description body"
 if grep -qx '## Human' "$LEGACY"; then fail "migrate should drop Human"; fi
 if grep -qx '## Validate' "$LEGACY"; then fail "migrate should rename Validate→Todo"; fi
+if grep -qx '## Descricao' "$LEGACY"; then fail "migrate should rename Descricao→Description"; fi
 pass "migrate PT → SCHEMA v0.1"
 
 printf '\nall tests passed\n'

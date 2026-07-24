@@ -221,6 +221,7 @@ MSG_UNKNOWN_CMD='mn: unknown command: %s'
 MSG_SEE_HELP='    mn help'
 MSG_INVALID_STATE='mn: invalid status: %s'
 MSG_USAGE_THREAD='usage: mn thread <text>              (short thread label)'
+MSG_USAGE_DESCRIPTION='usage: mn description <text>         (stream context / prose)'
 MSG_USAGE_TODO='usage: mn todo <text>                 (append Todo checklist item)'
 MSG_USAGE_NOW='usage: mn now <text>'
 MSG_USAGE_STATUS='usage: mn status <id>   (see: mn status --list; blocked needs reason)'
@@ -245,6 +246,7 @@ MSG_DASH='—'
 MSG_WATCH_HEADER=' mn watch · %ss · Ctrl+C to quit'
 MSG_MENU_TODO='todo — what I should verify/decide'
 MSG_MENU_THREAD='thread — short thread label'
+MSG_MENU_DESCRIPTION='description — stream context'
 MSG_MENU_NOW='now — what is happening'
 MSG_MENU_STATUS='status — pick from catalog (ai-dev)'
 MSG_MENU_WAIT='wait — what is blocking (when blocked)'
@@ -258,6 +260,7 @@ MSG_MENU_TITLE='mn +  (menu)'
 MSG_MENU_PROMPT='choice [1-%d]: '
 MSG_PROMPT_TODO='todo: '
 MSG_PROMPT_THREAD='thread (short label): '
+MSG_PROMPT_DESCRIPTION='description: '
 MSG_PROMPT_NOW='now: '
 MSG_PROMPT_STATUS='status id: '
 MSG_PROMPT_WAIT='blocked on (what is blocking): '
@@ -370,6 +373,9 @@ status: idle
 ## Thread
 
 
+## Description
+
+
 ## Now
 
 
@@ -411,11 +417,12 @@ migrate_note_to_en() {
   local content
   content="$(cat "$NOTE")"
 
-  # PT → EN + Validate/Need → Todo (SCHEMA v0.1)
+  # PT → EN + Validate/Need → Todo; Descricao → Description (SCHEMA v0.1)
   content="$(printf '%s\n' "$content" | sed -E \
     -e 's/^atualizado:/updated:/' \
     -e 's/^estado:/status:/' \
     -e 's/^## Fio$/## Thread/' \
+    -e 's/^## Descricao$/## Description/' \
     -e 's/^## Agora$/## Now/' \
     -e 's/^## Espera$/## Wait/' \
     -e 's/^## Bloqueio$/## Wait/' \
@@ -426,10 +433,10 @@ migrate_note_to_en() {
     -e 's/^## Closed$/## Finished/' \
     -e 's/\(nada ainda\)/(nothing yet)/g')"
 
-  # Drop removed sections (Description / Human and PT aliases) — body discarded.
+  # Drop removed section Human (+ PT) — body discarded. Description is kept.
   content="$(printf '%s\n' "$content" | awk '
     BEGIN { skip=0 }
-    /^## (Description|Descricao|Human|Humano)$/ { skip=1; next }
+    /^## (Human|Humano)$/ { skip=1; next }
     /^## / { skip=0 }
     skip { next }
     { print }
@@ -437,6 +444,14 @@ migrate_note_to_en() {
 
   atomic_write "$content"
 
+  # Ensure Description exists (after Thread)
+  if ! grep -qx '## Description' "$NOTE" 2>/dev/null; then
+    _ensure_heading_after "## Thread" "## Description"
+  fi
+  # Ensure Now exists (after Description)
+  if ! grep -qx '## Now' "$NOTE" 2>/dev/null; then
+    _ensure_heading_after "## Description" "## Now"
+  fi
   # Ensure Wait exists (after Now)
   if ! grep -qx '## Wait' "$NOTE" 2>/dev/null; then
     _ensure_heading_after "## Now" "## Wait"
@@ -579,6 +594,15 @@ cmd_thread() {
   ensure_schema
   replace_section "Thread" "$text"
   ok_write thread "$text"
+}
+
+cmd_description() {
+  local text="$*"
+  [[ -n "$text" ]] || { printf '%s\n' "$MSG_USAGE_DESCRIPTION" >&2; exit 2; }
+  [[ -f "$NOTE" ]] || cmd_init >/dev/null
+  ensure_schema
+  replace_section "Description" "$text"
+  ok_write description "$text"
 }
 
 cmd_now() {
@@ -896,7 +920,7 @@ cmd_check() {
   updated="$(printf '%s\n' "$meta" | sed -n '1p')"
   status="$(printf '%s\n' "$meta" | sed -n '2p')"
 
-  for h in Thread Now Wait Todo Finished; do
+  for h in Thread Description Now Wait Todo Finished; do
     if ! grep -qx "## $h" "$NOTE"; then
       msg "$MSG_CHECK_HEADING" "$h"
       errs=1
@@ -1134,6 +1158,7 @@ _show_card() {
 
   # Thread is always shown (required). Other blocks omit when empty.
   _print_short_block "Thread" "thread" "$SYM_THREAD" "$C_CYAN" "     " "$C_WHITE" 1
+  _print_short_block "Description" "description" "$SYM_DESC" "$C_MAGENTA" "     " "$C_WHITE"
   _print_short_block "Now" "now" "$SYM_NOW" "$C_YELLOW" "     " "$C_WHITE"
   _print_todo
   _print_finished
@@ -1195,6 +1220,7 @@ Read
 Write (quiet — one-line ok; use TUI or mn show for the card)
   mn init
   mn thread <text>
+  mn description <text>       stream context / prose
   mn now <text>
   mn wait <text>              what is blocking (required when blocked)
   mn todo <text>              append Todo checklist item
@@ -1222,7 +1248,7 @@ Status packs
   path:    MN_STATUSES=…  or  statuses= in config
 
 Shortcuts
-  t→thread  n→now  w→wait  v→todo  s→status  f→finish
+  t→thread  d→description  n→now  w→wait  v→todo  s→status  f→finish
 
 Env
   MN_FILE  MN_COLOR=0  NO_COLOR  MN_ASCII=1  MN_WATCH_INTERVAL
@@ -1323,6 +1349,7 @@ cmd_menu() {
     "$MSG_MENU_UI"
     "$MSG_MENU_TODO"
     "$MSG_MENU_THREAD"
+    "$MSG_MENU_DESCRIPTION"
     "$MSG_MENU_NOW"
     "$MSG_MENU_STATUS"
     "$MSG_MENU_WAIT"
@@ -1361,6 +1388,10 @@ cmd_menu() {
     thread*|*"short thread"*)
       printf '%s' "$MSG_PROMPT_THREAD"; read -r text
       [[ -n "$text" ]] && cmd_thread "$text"
+      ;;
+    description*|*"stream context"*)
+      printf '%s' "$MSG_PROMPT_DESCRIPTION"; read -r text
+      [[ -n "$text" ]] && cmd_description "$text"
       ;;
     now*|*"happening"*)
       printf '%s' "$MSG_PROMPT_NOW"; read -r text
@@ -1427,6 +1458,7 @@ main() {
 
   case "$cmd" in
     t) cmd="thread" ;;
+    d) cmd="description" ;;
     n) cmd="now" ;;
     w) cmd="wait" ;;
     v|e) cmd="todo" ;;
@@ -1445,6 +1477,7 @@ main() {
     help)            cmd_help ;;
     lang)            cmd_lang "$@" ;;
     thread)          cmd_thread "$@" ;;
+    description|desc) cmd_description "$@" ;;
     now)             cmd_now "$@" ;;
     wait|blocked-on) cmd_wait "$@" ;;
     todo|need)       cmd_todo "$@" ;;

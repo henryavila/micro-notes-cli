@@ -41,6 +41,7 @@ Ensure `~/.local/bin` is on `PATH` (the installer can write a shell rc block).
 cd /path/to/worktree
 mn init
 mn thread "webhooks Paddle — idempotency"
+mn description "idempotency keys + dual-write cutover notes"
 mn now "writing tests"
 mn todo "npm test -- webhook"
 mn status coding
@@ -157,6 +158,7 @@ When status **requires wait** (`blocked`):
 | Key | Action |
 |-----|--------|
 | `t` | edit thread (short label) |
+| `d` | edit description (stream context) |
 | `n` | edit now |
 | `w` | blocked on (`## Wait` — required when blocked) |
 | `v` | add todo item |
@@ -164,19 +166,19 @@ When status **requires wait** (`blocked`):
 | `f` | finished (settled decision) |
 | `j` / `k` or arrows | move todo focus |
 | `space` / `x` | toggle todo item |
-| `d` / backspace | remove focused todo item |
+| backspace | remove focused todo item |
 | `c` | clear menu — done todos / all todos / now+wait / everything |
 | `r` | reload file |
 | `i` | init file if missing |
 | `?` | help |
 | `q` | quit |
 
-**Clear menu (`c`):** pick what to wipe. *done todos* removes only checked items; *all todos* = `mn clear-todo`; *now + wait* clears activity; *everything* resets Now/Wait/Todo/Finished + status→idle but **keeps Thread** (confirm with Enter).
+**Clear menu (`c`):** pick what to wipe. *done todos* removes only checked items; *all todos* = `mn clear-todo`; *now + wait* clears activity; *everything* resets Description/Now/Wait/Todo/Finished + status→idle but **keeps Thread** (confirm with Enter).
 
 Footer chips (priority order): one bar when they fit; **second bar on narrow terminals** before any chip is dropped. Only if both bars overflow do chips drop from the right:  
-`t` `n` `w`* `v` `s` `sp` `d` `f` `c` `?` `q` — \*`w` only while blocked.
+`t` `d` `n` `w`* `v` `s` `sp` `f` `c` `?` `q` — \*`w` only while blocked.
 
-**Removed from SCHEMA v0.1:** `h`/Human, `d`/Description (and `## Validate` / `## Need` → `## Todo`).
+**Removed from SCHEMA v0.1:** `h`/Human (and `## Validate` / `## Need` → `## Todo`). **Description is kept.**
 
 Empty sections are **hidden**. Thread always shows (hint `set with t` if blank).
 
@@ -192,6 +194,9 @@ status: idle|designing|await-design|planning|review-plan|coding|review-code|bloc
 ## Thread
 short label — stream identity
 
+## Description
+optional longer stream context
+
 ## Now
 what is happening
 
@@ -205,14 +210,15 @@ what is blocking (required when status=blocked; cleared when unblocked)
 -
 ```
 
-Legacy files (`## Validate`, `## Description`, `## Human`, `## Closed`, PT headings) **migrate on read/write**: Validate/Need→Todo; Closed→Finished; Description/Human dropped.
+Legacy files (`## Validate`, `## Human`, `## Closed`, PT headings) **migrate on read/write**: Validate/Need→Todo; Closed→Finished; Descricao→Description; **Human dropped**. Description is kept.
 
 | Section | Role |
 |---------|------|
 | **Thread** | Short stream label (required for `mn check`) |
+| **Description** | Optional longer context for the stream |
 | **Now** | Current activity |
 | **Wait** | What is blocking — required when `blocked` |
-| **Todo** | Human verify/decide checklist |
+| **Todo** | Verify/decide checklist |
 | **Finished** | Settled decisions |
 
 ## Commands
@@ -225,6 +231,7 @@ Legacy files (`## Validate`, `## Description`, `## Human`, `## Closed`, PT headi
 | `mn watch [n]` | full-screen refresh loop |
 | `mn init` | create file |
 | `mn thread "…"` | set thread (quiet) |
+| `mn description "…"` | set description / stream context (alias: `desc`; shortcut `d`) |
 | `mn now "…"` | set now |
 | `mn wait "…"` | set what is blocking |
 | `mn todo "…"` | add Todo checklist item |
@@ -245,7 +252,7 @@ Legacy files (`## Validate`, `## Description`, `## Human`, `## Closed`, PT headi
 | `mn help` | help |
 | `mn touch` | stamp `updated:` only |
 
-**CLI shortcuts:** `t` `n` `w` `v` `s` `f`
+**CLI shortcuts:** `t` `d` `n` `w` `v` `s` `f`
 
 ## Env
 

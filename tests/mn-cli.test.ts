@@ -44,11 +44,11 @@ describe('mn CLI (real process)', () => {
     expect(raw).toMatch(/^updated:/m);
     expect(raw).toMatch(/^status:/m);
     expect(raw).toContain('## Thread');
+    expect(raw).toContain('## Description');
     expect(raw).toContain('## Now');
     expect(raw).toContain('## Wait');
     expect(raw).toContain('## Todo');
     expect(raw).toContain('## Finished');
-    expect(raw).not.toContain('## Description');
     expect(raw).not.toContain('## Human');
     expect(raw).not.toContain('## Validate');
     expect(raw).toContain('(nothing yet)');
@@ -177,12 +177,14 @@ describe('mn CLI (real process)', () => {
   it('cross-stack: bash-written file is parseable by TS with same fields', () => {
     runMn(['init'], env());
     runMn(['thread', 'cross-stack'], env());
+    runMn(['description', 'stream context'], env());
     runMn(['now', 'parity'], env());
     runMn(['todo', 'item-a'], env());
     runMn(['status', 'working'], env());
     runMn(['finish', 'decision'], env());
     const note = parseNote(readFileSync(MN_FILE, 'utf8'));
     expect(note.thread).toBe('cross-stack');
+    expect(note.description).toBe('stream context');
     expect(note.now).toBe('parity');
     expect(note.status).toBe('coding');
     expect(note.todo).toEqual([{ text: 'item-a', done: false }]);
@@ -193,6 +195,19 @@ describe('mn CLI (real process)', () => {
       'decision',
       'legacy-alias',
     ]);
+  });
+
+  it('description writes quietly and is TS-parseable', () => {
+    runMn(['init'], env());
+    const bad = runMn(['description'], env());
+    expect(bad.status).toBe(2);
+    const ok = runMn(['description', 'paddle dual-write'], env());
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toMatch(/ok · description/);
+    expect(parseNote(readFileSync(MN_FILE, 'utf8')).description).toBe('paddle dual-write');
+    // shortcut d
+    expect(runMn(['d', 'via-d'], env()).status).toBe(0);
+    expect(parseNote(readFileSync(MN_FILE, 'utf8')).description).toBe('via-d');
   });
 
   it('cross-stack: TS writeNoteFile is accepted by mn check/show', async () => {
@@ -243,12 +258,12 @@ old human note
     expect(body).toMatch(/^updated:/m);
     expect(body).toMatch(/^status:/m);
     expect(body).toContain('## Thread');
+    expect(body).toContain('## Description');
     expect(body).toContain('## Todo');
     expect(body).toContain('## Finished');
     expect(body).toContain('old thread');
     expect(body).not.toContain('## Human');
     expect(body).not.toContain('## Humano');
-    expect(body).not.toContain('## Description');
     expect(body).not.toContain('## Closed');
     expect(body).not.toContain('## Fechado');
   });

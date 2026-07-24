@@ -1,5 +1,10 @@
 # micro-notes-cli — Plano
 
+> **STALE / historical (pre-v0.1).** Canonical product schema is **`SCHEMA-v0.1.md`** + **`README.md`**.  
+> Live surface: Thread · **Description** · Now · Wait · Todo · Finished.  
+> **Human** was removed. PT headings / Validate / Closed only exist as migration aliases.  
+> Do not implement from this file.
+
 CLI de **microNote** no terminal para reentrada humana ao trabalhar com vários agentes (ex.: Herdr: workspace → page → panes, 1 worktree por page).
 
 **Problema que resolve:** ao saltar entre agents/pages, o humano não lembra o *fio* da conversa nem *o que validar* neste caso. Handoff serve o agent; dashboard serve routing; **microNote serve o revisor (tu)**.

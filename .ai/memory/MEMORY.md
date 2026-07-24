@@ -10,8 +10,10 @@
 
 ## Regras rápidas
 
-- Secções canónicas: Thread · Now · Wait · Todo · **Finished** (legado: Closed)
-- Teclas: `f` finished · `c` clear · `d` del todo · `v` todo · `C` **não** existe
+- Secções canónicas: Thread · **Description** · Now · Wait · Todo · Finished
+- Human removido; Validate/Need/Closed só migração/aliases
+- Teclas: `d` description · `f` finished · `c` clear · backspace del todo · `v` todo
 - Install: `pack=` em `~/.config/mn/config` é sticky (reinstall mantém)
 - Não commitar: `MICRONOTE.md` local, `cfg-status/`
 - blink-tui: `file:../blink-tui`; Footer `maxRows=2` (rebuild + sync node_modules)
+- PLAN.md é STALE — fonte: SCHEMA-v0.1.md + README.md
