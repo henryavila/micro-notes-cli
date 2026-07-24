@@ -7,6 +7,7 @@
 #   ./install.sh --prefix DIR    # install to DIR instead of ~/.local/bin
 #   ./install.sh --alias-only    # only add shell alias (no copy; points to repo)
 #   ./install.sh --lang en # language (non-interactive)
+#   ./install.sh --pack generic|ai-dev   # status pack (skip prompt)
 #   ./install.sh --uninstall     # remove binary + PATH/alias blocks we added
 #   ./install.sh --dry-run
 #
@@ -24,7 +25,7 @@ UNINSTALL=0
 DRY_RUN=0
 FORCE_RC=0           # write rc even if already on PATH
 LANG_ARG="${MN_LANG:-}"  # empty → prompt (if TTY) or detect
-
+PACK_ARG="${MN_PACK:-}"  # empty → prompt (if TTY) or generic
 MARKER_BEGIN="# >>> micro-notes-cli (mn) >>>"
 MARKER_END="# <<< micro-notes-cli (mn) <<<"
 
@@ -37,6 +38,7 @@ install.sh — micro-notes-cli (mn)
   ./install.sh --prefix DIR    install directory (default: ~/.local/bin)
   ./install.sh --alias-only    add shell alias mn=.../bin/mn (no install dir)
   ./install.sh --lang en set UI language (skip prompt)
+  ./install.sh --pack generic|ai-dev   status pack (default: generic)
   ./install.sh --uninstall     remove binary we installed + rc block + config lang
   ./install.sh --force-rc      always (re)write shell rc PATH/alias block
   ./install.sh --dry-run       print actions only
@@ -45,6 +47,7 @@ install.sh — micro-notes-cli (mn)
 Env:
   MN_PREFIX     same as --prefix
   MN_LANG       same as --lang (en)
+  MN_PACK       same as --pack (generic|ai-dev)
   MN_SHARE_DIR  locales install dir (default: ~/.local/share/mn)
   MN_CONFIG_DIR config dir (default: ~/.config/mn)
 EOF
@@ -130,6 +133,77 @@ write_lang_config() {
   mv -f "$tmp" "$CONFIG_FILE"
 }
 
+# Interactive status-pack picker. Prompts on stderr; pack id on stdout.
+pick_status_pack() {
+  if [[ -n "$PACK_ARG" ]]; then
+    case "$PACK_ARG" in
+      generic|ai-dev) printf '%s\n' "$PACK_ARG"; return 0 ;;
+      *)
+        warn "unknown pack '$PACK_ARG' — using generic"
+        printf 'generic\n'
+        return 0
+        ;;
+    esac
+  fi
+  if [[ ! -t 0 ]] || [[ ! -r /dev/tty ]]; then
+    printf 'generic\n'
+    return 0
+  fi
+  {
+    printf '\n'
+    printf '  Status pack (which statuses appear in mn / TUI)\n'
+    printf '\n'
+    printf '    1) generic   — idle · working · blocked · ready  (default)\n'
+    printf '    2) ai-dev    — design → plan → code → review stages\n'
+    printf '\n'
+    printf '  You can change later: mn status pack list | mn status pack <id>\n'
+    printf '  Personal overlay:     mn status init  (edit statuses.json)\n'
+    printf '\n'
+    printf '  choice [1]: '
+  } >&2
+  local ans=""
+  # shellcheck disable=SC2162
+  read -r ans </dev/tty || true
+  case "${ans:-1}" in
+    2|ai-dev|ai|dev) printf 'ai-dev\n' ;;
+    *) printf 'generic\n' ;;
+  esac
+}
+
+write_pack_config() {
+  local pack="$1"
+  case "$pack" in
+    generic|ai-dev) ;;
+    *) die "internal: invalid pack: $pack" ;;
+  esac
+  info "status pack: $pack → $CONFIG_FILE"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "[dry-run] write pack=$pack to $CONFIG_FILE"
+    return 0
+  fi
+  mkdir -p "$CONFIG_DIR"
+  local tmp line wrote=0
+  tmp="$(mktemp)"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" == pack=* ]]; then
+        if [[ $wrote -eq 0 ]]; then
+          printf 'pack=%s\n' "$pack"
+          wrote=1
+        fi
+      else
+        printf '%s\n' "$line"
+      fi
+    done <"$CONFIG_FILE" >"$tmp"
+  else
+    : >"$tmp"
+  fi
+  if [[ $wrote -eq 0 ]]; then
+    printf 'pack=%s\n' "$pack" >>"$tmp"
+  fi
+  mv -f "$tmp" "$CONFIG_FILE"
+}
+
 install_locales() {
   [[ -d "$LOCALES_SRC" ]] || die "missing $LOCALES_SRC"
   local dest="$SHARE_DIR/locales"
@@ -151,6 +225,8 @@ while [[ $# -gt 0 ]]; do
     --prefix=*)   PREFIX="${1#*=}"; shift ;;
     --lang)       LANG_ARG="${2:-}"; [[ -n "$LANG_ARG" ]] || die "--lang needs en"; shift 2 ;;
     --lang=*)     LANG_ARG="${1#*=}"; shift ;;
+    --pack)       PACK_ARG="${2:-}"; [[ -n "$PACK_ARG" ]] || die "--pack needs generic|ai-dev"; shift 2 ;;
+    --pack=*)     PACK_ARG="${1#*=}"; shift ;;
     --uninstall)  UNINSTALL=1; shift ;;
     --force-rc)   FORCE_RC=1; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
@@ -362,6 +438,14 @@ esac
 log "lang:   $SELECTED_LANG"
 
 write_lang_config "$SELECTED_LANG"
+
+SELECTED_PACK="$(pick_status_pack)"
+case "$SELECTED_PACK" in
+  generic|ai-dev) ;;
+  *) die "failed to resolve status pack (got: ${SELECTED_PACK//$'\n'/ | })" ;;
+esac
+log "pack:   $SELECTED_PACK"
+write_pack_config "$SELECTED_PACK"
 # Persist repo root so `mn ui` finds the blink TUI after install --link / copy from repo
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "[dry-run] write root=$ROOT to $CONFIG_FILE"

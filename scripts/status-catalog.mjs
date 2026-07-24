@@ -1,69 +1,99 @@
 #!/usr/bin/env node
 /**
  * status-catalog.mjs — shell-facing catalog bridge for bin/mn.
+ * Fast pure-JSON path (schemas/packs + config pack= + statuses.json overlay).
+ * Keeps resolution aligned with tui/src/status-catalog.ts.
  *
  * Usage:
- *   node scripts/status-catalog.mjs ids          → idle|designing|...
- *   node scripts/status-catalog.mjs list         → one id per line
- *   node scripts/status-catalog.mjs glyph ID
- *   node scripts/status-catalog.mjs label ID
- *   node scripts/status-catalog.mjs intent ID    → ignore|act
- *   node scripts/status-catalog.mjs badge ID
- *   node scripts/status-catalog.mjs requires-wait ID → 0|1
- *   node scripts/status-catalog.mjs valid ID     → 0|1
- *   node scripts/status-catalog.mjs canon ID     → canonical id
- *   node scripts/status-catalog.mjs source
+ *   node scripts/status-catalog.mjs ids|list|glyph|label|intent|badge|requires-wait|valid|canon|source|pack|pack-id|packs [id]
  */
-import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { existsSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
-const catalogTs = join(root, 'tui/src/status-catalog.ts');
-const catalogJs = join(root, 'tui/dist/status-catalog.js');
 
-async function loadCatalogModule() {
-  // Prefer compiled dist; else tsx-register via dynamic import of .ts through tsx
-  if (existsSync(catalogJs)) {
-    return import(pathToFileURL(catalogJs).href);
+function readConfigValue(configFile, key) {
+  if (!existsSync(configFile)) return undefined;
+  for (const line of readFileSync(configFile, 'utf8').split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const eq = t.indexOf('=');
+    if (eq < 0) continue;
+    if (t.slice(0, eq).trim() === key) return t.slice(eq + 1).trim();
   }
-  // Dev: run ourselves under tsx if needed
-  const tsx = join(root, 'node_modules/tsx/dist/cli.mjs');
-  if (existsSync(tsx) && existsSync(catalogTs)) {
-    // Import via tsx loader
-    const { register } = await import('node:module');
-    try {
-      // Node 20.6+ --import tsx equivalent via spawn is more reliable
-    } catch {
-      /* fall through */
+  return undefined;
+}
+
+function loadPackJson(id) {
+  const path = join(root, 'schemas/packs', `${id}.json`);
+  if (existsSync(path)) return { pack: JSON.parse(readFileSync(path, 'utf8')), path };
+  return null;
+}
+
+function deepMerge(base, over) {
+  return {
+    ...base,
+    ...over,
+    pack: over.pack ?? base.pack,
+    order: over.order ?? base.order,
+    aliases: { ...(base.aliases || {}), ...(over.aliases || {}) },
+    statuses: { ...(base.statuses || {}), ...(over.statuses || {}) },
+  };
+}
+
+function loadCatalog() {
+  const configDir = process.env.MN_CONFIG_DIR || join(homedir(), '.config/mn');
+  const configFile = process.env.MN_CONFIG_FILE || join(configDir, 'config');
+  const packId =
+    process.env.MN_PACK?.trim() ||
+    readConfigValue(configFile, 'pack') ||
+    'generic';
+
+  let pack;
+  let source;
+
+  const pathOverride =
+    process.env.MN_STATUSES?.trim() || readConfigValue(configFile, 'statuses');
+  if (pathOverride && existsSync(pathOverride)) {
+    pack = JSON.parse(readFileSync(pathOverride, 'utf8'));
+    source = pathOverride;
+  } else {
+    const loaded = loadPackJson(packId) || loadPackJson('generic');
+    if (!loaded) {
+      pack = {
+        pack: 'generic',
+        order: ['idle', 'working', 'blocked', 'ready'],
+        aliases: {},
+        statuses: {
+          idle: { intent: 'ignore', glyph: '○', label: 'idle' },
+          working: { intent: 'ignore', glyph: '◉', label: 'working' },
+          blocked: {
+            intent: 'act',
+            glyph: '!',
+            label: 'blocked',
+            requiresWait: true,
+            badge: 'needs you',
+          },
+          ready: { intent: 'act', glyph: '►', label: 'ready', badge: 'validate' },
+        },
+      };
+      source = 'builtin:generic';
+    } else {
+      pack = loaded.pack;
+      source = loaded.path;
     }
   }
-  // Inline minimal JSON loader (no TS) so bash never depends on tsx for ids
-  const { readFileSync } = await import('node:fs');
-  const { homedir } = await import('node:os');
 
-  const builtinPath = join(root, 'schemas/statuses.default.json');
-  let pack = JSON.parse(readFileSync(builtinPath, 'utf8'));
-
-  const configDir = process.env.MN_CONFIG_DIR || join(homedir(), '.config/mn');
-  const override =
-    process.env.MN_STATUSES?.trim() ||
-    join(configDir, 'statuses.json');
-  if (override && existsSync(override)) {
+  const userFile = join(configDir, 'statuses.json');
+  if (existsSync(userFile) && pathOverride !== userFile) {
     try {
-      const over = JSON.parse(readFileSync(override, 'utf8'));
-      pack = {
-        ...pack,
-        ...over,
-        order: over.order ?? pack.order,
-        aliases: { ...(pack.aliases || {}), ...(over.aliases || {}) },
-        statuses: { ...(pack.statuses || {}), ...(over.statuses || {}) },
-      };
+      const over = JSON.parse(readFileSync(userFile, 'utf8'));
+      pack = deepMerge(pack, over);
     } catch {
-      /* keep base */
+      /* keep */
     }
   }
 
@@ -82,11 +112,14 @@ async function loadCatalogModule() {
   const statuses = pack.statuses || {};
 
   return {
-    statusIds: () => uniq,
-    statusIdsPipe: () => uniq.join('|'),
-    canonicalizeStatus: canon,
-    isValidStatus: (id) => Boolean(statuses[canon(id)]) || Boolean(aliases[id]),
-    resolveStatus: (id) => {
+    packId: pack.pack || packId,
+    configuredPackId: packId,
+    source,
+    order: uniq,
+    aliases,
+    statuses,
+    canon,
+    resolve(id) {
       const c = canon(id);
       const s = statuses[c] || {};
       return {
@@ -94,60 +127,61 @@ async function loadCatalogModule() {
         intent: s.intent === 'act' ? 'act' : 'ignore',
         glyph: s.glyph || '?',
         label: s.label || c,
-        badge: s.badge,
+        badge: s.badge || '',
         requiresWait: s.requiresWait === true || c === 'blocked',
       };
     },
-    statusRequiresWait: (id) => {
-      const c = canon(id);
-      const s = statuses[c] || {};
-      return s.requiresWait === true || c === 'blocked';
+    valid(id) {
+      return Boolean(statuses[canon(id)]) || Boolean(aliases[id]);
     },
-    statusGlyph: (id) => {
-      const c = canon(id);
-      return (statuses[c] || {}).glyph || '?';
-    },
-    getCatalog: () => ({ source: existsSync(override) ? override : builtinPath, pack: pack.pack }),
   };
 }
 
-const mod = await loadCatalogModule();
+const cat = loadCatalog();
 const [cmd, arg = ''] = process.argv.slice(2);
 
 switch (cmd) {
   case 'ids':
-    process.stdout.write(mod.statusIdsPipe() + '\n');
+    process.stdout.write(cat.order.join('|') + '\n');
     break;
   case 'list':
-    for (const id of mod.statusIds()) process.stdout.write(id + '\n');
+    for (const id of cat.order) process.stdout.write(id + '\n');
     break;
   case 'glyph':
-    process.stdout.write(mod.resolveStatus(arg).glyph + '\n');
+    process.stdout.write(cat.resolve(arg).glyph + '\n');
     break;
   case 'label':
-    process.stdout.write(mod.resolveStatus(arg).label + '\n');
+    process.stdout.write(cat.resolve(arg).label + '\n');
     break;
   case 'intent':
-    process.stdout.write(mod.resolveStatus(arg).intent + '\n');
+    process.stdout.write(cat.resolve(arg).intent + '\n');
     break;
   case 'badge':
-    process.stdout.write((mod.resolveStatus(arg).badge || '') + '\n');
+    process.stdout.write(cat.resolve(arg).badge + '\n');
     break;
   case 'requires-wait':
-    process.stdout.write((mod.statusRequiresWait(arg) ? '1' : '0') + '\n');
+    process.stdout.write((cat.resolve(arg).requiresWait ? '1' : '0') + '\n');
     break;
   case 'valid':
-    process.stdout.write((mod.isValidStatus(arg) ? '1' : '0') + '\n');
+    process.stdout.write((cat.valid(arg) ? '1' : '0') + '\n');
     break;
   case 'canon':
-    process.stdout.write(mod.canonicalizeStatus(arg) + '\n');
+    process.stdout.write(cat.canon(arg) + '\n');
     break;
   case 'source':
-    process.stdout.write((mod.getCatalog?.().source || '') + '\n');
+    process.stdout.write(cat.source + '\n');
+    break;
+  case 'pack':
+  case 'pack-id':
+    process.stdout.write(cat.configuredPackId + '\n');
+    break;
+  case 'packs':
+    process.stdout.write('generic\tGeneric\tidle / working / blocked / ready\n');
+    process.stdout.write('ai-dev\tAI / multi-agent\tdesign → plan → code → review\n');
     break;
   default:
     process.stderr.write(
-      'usage: status-catalog.mjs ids|list|glyph|label|intent|badge|requires-wait|valid|canon|source [id]\n',
+      'usage: status-catalog.mjs ids|list|glyph|label|intent|badge|requires-wait|valid|canon|source|pack|packs [id]\n',
     );
     process.exit(2);
 }

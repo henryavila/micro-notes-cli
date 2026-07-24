@@ -30,6 +30,8 @@ export function runMn(
       ...process.env,
       MN_COLOR: '0',
       MN_ASCII: '1',
+      // Tests historically exercise ai-dev statuses (coding, review-*); override with env.MN_PACK.
+      MN_PACK: env.MN_PACK ?? 'ai-dev',
       PATH: process.env.PATH,
       ...env,
     },

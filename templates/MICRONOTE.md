@@ -5,20 +5,14 @@ status: idle
 ## Thread
 
 
-## Description
-
-
 ## Now
 
 
 ## Wait
 
 
-## Validate
+## Todo
 - [ ] (nothing yet)
-
-## Human
-
 
 ## Closed
 - 

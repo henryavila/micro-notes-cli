@@ -8,8 +8,8 @@ set -euo pipefail
 MN_VERSION="0.4.0"
 DEFAULT_FILE="MICRONOTE.md"
 PLACEHOLDER_VALIDATE="- [ ] (nothing yet)"
-# Fallback until catalog loads (ai-dev pack is the product default).
-VALID_STATUSES="idle|designing|await-design|planning|review-plan|coding|review-code|blocked|ready"
+# Fallback until Node catalog loads (generic pack is the product default).
+VALID_STATUSES="idle|working|blocked|ready"
 CONFIG_DIR="${MN_CONFIG_DIR:-$HOME/.config/mn}"
 CONFIG_FILE="${MN_CONFIG_FILE:-$CONFIG_DIR/config}"
 SHARE_DIR_DEFAULT="${MN_SHARE_DIR:-$HOME/.local/share/mn}"
@@ -39,9 +39,9 @@ MN_BIN_DIR="$(cd "$(dirname "$MN_BIN")" && pwd)"
 # Repo root: bin/ → parent (works for symlink install --link)
 MN_REPO_ROOT="$(cd "$MN_BIN_DIR/.." 2>/dev/null && pwd)"
 
-# ── status catalog (ai-dev pack + ~/.config/mn/statuses.json override) ──
+# ── status catalog (packs: generic|ai-dev + optional statuses.json overlay) ──
 _status_catalog() {
-  local script cand
+  local cand
   for cand in \
     "${MN_REPO_ROOT}/scripts/status-catalog.mjs" \
     "${SHARE_DIR_DEFAULT}/scripts/status-catalog.mjs" \
@@ -51,36 +51,83 @@ _status_catalog() {
       node "$cand" "$@" 2>/dev/null && return 0
     fi
   done
-  # last-resort static fallback
+  # last-resort static fallback = generic pack
   case "${1:-}" in
     ids) printf '%s\n' "$VALID_STATUSES" ;;
-    list) printf '%s\n' idle designing await-design planning review-plan coding review-code blocked ready ;;
+    list) printf '%s\n' idle working blocked ready ;;
     glyph)
       case "${2:-}" in
-        idle) printf '○\n' ;; designing) printf '◈\n' ;; await-design) printf '◇\n' ;;
-        planning) printf '▤\n' ;; review-plan) printf '▣\n' ;; coding) printf '◉\n' ;;
-        review-code) printf '◐\n' ;; blocked) printf '!\n' ;; ready) printf '►\n' ;;
-        working) printf '◉\n' ;; *) printf '?\n' ;;
+        idle) printf '○\n' ;; working|coding) printf '◉\n' ;;
+        blocked) printf '!\n' ;; ready) printf '►\n' ;;
+        *) printf '?\n' ;;
       esac
       ;;
     label) printf '%s\n' "${2:-?}" ;;
     intent)
       case "${2:-}" in
-        idle|designing|planning|coding|working) printf 'ignore\n' ;;
+        idle|working|coding|designing|planning) printf 'ignore\n' ;;
         *) printf 'act\n' ;;
       esac
       ;;
     requires-wait) [[ "${2:-}" == "blocked" ]] && printf '1\n' || printf '0\n' ;;
     valid)
-      if [[ "${2:-}" =~ ^(idle|designing|await-design|planning|review-plan|coding|review-code|blocked|ready|working)$ ]]; then
+      if [[ "${2:-}" =~ ^(idle|working|blocked|ready)$ ]]; then
         printf '1\n'
       else
         printf '0\n'
       fi
       ;;
-    canon) [[ "${2:-}" == "working" ]] && printf 'coding\n' || printf '%s\n' "${2:-}" ;;
+    canon) printf '%s\n' "${2:-}" ;;
+    pack|pack-id) printf 'generic\n' ;;
+    packs)
+      printf 'generic\tGeneric\tidle / working / blocked / ready\n'
+      printf 'ai-dev\tAI / multi-agent\tdesign → plan → code → review\n'
+      ;;
+    source) printf 'builtin:generic\n' ;;
     *) return 1 ;;
   esac
+}
+
+# Upsert key=value in CONFIG_FILE
+_config_set() {
+  local key="$1" val="$2"
+  mkdir -p "$CONFIG_DIR"
+  local tmp
+  tmp="$(mktemp)"
+  local wrote=0
+  if [[ -f "$CONFIG_FILE" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$line" == "${key}="* ]]; then
+        if [[ $wrote -eq 0 ]]; then
+          printf '%s=%s\n' "$key" "$val"
+          wrote=1
+        fi
+      else
+        printf '%s\n' "$line"
+      fi
+    done <"$CONFIG_FILE" >"$tmp"
+  else
+    : >"$tmp"
+  fi
+  if [[ $wrote -eq 0 ]]; then
+    printf '%s=%s\n' "$key" "$val" >>"$tmp"
+  fi
+  mv -f "$tmp" "$CONFIG_FILE"
+}
+
+_statuses_pack_file() {
+  local id="${1:-generic}" cand
+  for cand in \
+    "${MN_REPO_ROOT}/schemas/packs/${id}.json" \
+    "${SHARE_DIR_DEFAULT}/schemas/packs/${id}.json" \
+    "$MN_BIN_DIR/../schemas/packs/${id}.json"
+  do
+    if [[ -f "$cand" ]]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  return 1
 }
 
 _load_status_catalog() {
@@ -92,8 +139,13 @@ _load_status_catalog() {
 }
 _load_status_catalog
 
-# Shipped default pack (repo) and user override path.
+# Shipped pack file for the active pack id (generic default).
 _statuses_default_file() {
+  local id
+  id="$(_status_catalog pack-id 2>/dev/null | tr -d '\r' || true)"
+  [[ -z "$id" ]] && id="generic"
+  _statuses_pack_file "$id" && return 0
+  _statuses_pack_file "generic" && return 0
   local cand
   for cand in \
     "${MN_REPO_ROOT}/schemas/statuses.default.json" \
@@ -129,12 +181,10 @@ MSG_UNKNOWN_CMD='mn: unknown command: %s'
 MSG_SEE_HELP='    mn help'
 MSG_INVALID_STATE='mn: invalid status: %s'
 MSG_USAGE_THREAD='usage: mn thread <text>              (short thread label)'
-MSG_USAGE_DESCRIPTION='usage: mn description [--append] <text>   (long context)'
+MSG_USAGE_TODO='usage: mn todo <text>                 (append Todo checklist item)'
 MSG_USAGE_NOW='usage: mn now <text>'
-MSG_USAGE_VALIDATE='usage: mn validate <text>'
 MSG_USAGE_STATUS='usage: mn status <id>   (see: mn status --list; blocked needs reason)'
 MSG_USAGE_WAIT='usage: mn wait <text>                 (what is blocking — required when blocked)'
-MSG_USAGE_HUMAN='usage: mn human [--replace] <text>'
 MSG_USAGE_CLOSE='usage: mn close <text>'
 MSG_CHECK_MISSING='fail: file not found (%s) — mn init'
 MSG_CHECK_HEADING='fail: missing heading ## %s'
@@ -142,10 +192,10 @@ MSG_CHECK_STATE_EMPTY='fail: empty status'
 MSG_CHECK_STATE_INVALID='fail: invalid status: %s'
 MSG_CHECK_THREAD_EMPTY='fail: Thread is empty'
 MSG_CHECK_WAIT_EMPTY='fail: status=blocked requires ## Wait (what is blocking) — mn wait "…"'
-MSG_CHECK_VALIDATE_EMPTY='fail: Validate empty — add an item or: - [ ] (nothing yet)'
-MSG_CHECK_VALIDATE_NO_CB='fail: Validate has no checkboxes — use mn validate "…" or the placeholder'
+MSG_CHECK_TODO_EMPTY='fail: Todo empty — add an item or: - [ ] (nothing yet)'
+MSG_CHECK_TODO_NO_CB='fail: Todo has no checkboxes — use mn todo "…" or the placeholder'
 MSG_CHECK_OK='ok'
-MSG_TO_VALIDATE='%s to validate'
+MSG_TO_VALIDATE='%s open todo'
 MSG_NEEDS_YOU='needs you'
 MSG_BLOCKED_ON='blocked on'
 MSG_STATUS_BLOCKED_NEEDS_WAIT='mn: status=blocked requires a reason — mn wait "what is blocking" (or: mn status blocked -- "reason")'
@@ -153,28 +203,24 @@ MSG_EMPTY='(empty)'
 MSG_PLACEHOLDER_BODY='(nothing yet)'
 MSG_DASH='—'
 MSG_WATCH_HEADER=' mn watch · %ss · Ctrl+C to quit'
-MSG_MENU_VALIDATE='validate — what I should check'
+MSG_MENU_TODO='todo — what I should verify/decide'
 MSG_MENU_THREAD='thread — short thread label'
-MSG_MENU_DESCRIPTION='description — long thread context'
 MSG_MENU_NOW='now — what is happening'
 MSG_MENU_STATUS='status — pick from catalog (ai-dev)'
 MSG_MENU_WAIT='wait — what is blocking (when blocked)'
-MSG_MENU_HUMAN='human — my note'
 MSG_MENU_CLOSE='close — closed decision'
-MSG_MENU_DONE='done — mark validate item done'
+MSG_MENU_DONE='done — mark todo item done'
 MSG_MENU_SHOW='show card'
 MSG_MENU_UI='ui — blink TUI'
 MSG_MENU_CHECK='check'
 MSG_MENU_CANCEL='cancel'
 MSG_MENU_TITLE='mn +  (menu)'
 MSG_MENU_PROMPT='choice [1-%d]: '
-MSG_PROMPT_VALIDATE='validate: '
+MSG_PROMPT_TODO='todo: '
 MSG_PROMPT_THREAD='thread (short label): '
-MSG_PROMPT_DESCRIPTION='description (context): '
 MSG_PROMPT_NOW='now: '
 MSG_PROMPT_STATUS='status id: '
 MSG_PROMPT_WAIT='blocked on (what is blocking): '
-MSG_PROMPT_HUMAN='human: '
 MSG_PROMPT_CLOSE='close: '
 MSG_PROMPT_DONE='done (n or text, empty=first): '
 MSG_FZF_PROMPT='mn › '
@@ -284,20 +330,14 @@ status: idle
 ## Thread
 
 
-## Description
-
-
 ## Now
 
 
 ## Wait
 
 
-## Validate
+## Todo
 $PLACEHOLDER_VALIDATE
-
-## Human
-
 
 ## Closed
 - 
@@ -328,55 +368,46 @@ _ensure_heading_after() {
 
 migrate_note_to_en() {
   [[ -f "$NOTE" ]] || return 0
-  if grep -qE '^updated:' "$NOTE" 2>/dev/null && grep -qx '## Thread' "$NOTE" 2>/dev/null; then
-    if ! grep -qx '## Description' "$NOTE" 2>/dev/null; then
-      _ensure_heading_after "## Thread" "## Description"
-    fi
-    if ! grep -qx '## Wait' "$NOTE" 2>/dev/null; then
-      _ensure_heading_after "## Now" "## Wait"
-    fi
-    return 0
-  fi
-  if ! grep -qE '^(atualizado|estado):' "$NOTE" 2>/dev/null && ! grep -qx '## Fio' "$NOTE" 2>/dev/null; then
-    # EN file missing Wait only
-    if grep -qx '## Thread' "$NOTE" 2>/dev/null && ! grep -qx '## Wait' "$NOTE" 2>/dev/null; then
-      _ensure_heading_after "## Now" "## Wait"
-    fi
-    return 0
-  fi
-  local content out seen=0 inserted=0 line
+  local content
   content="$(cat "$NOTE")"
+
+  # PT → EN + Validate/Need → Todo (SCHEMA v0.1)
   content="$(printf '%s\n' "$content" | sed -E \
     -e 's/^atualizado:/updated:/' \
     -e 's/^estado:/status:/' \
     -e 's/^## Fio$/## Thread/' \
-    -e 's/^## Descricao$/## Description/' \
     -e 's/^## Agora$/## Now/' \
     -e 's/^## Espera$/## Wait/' \
     -e 's/^## Bloqueio$/## Wait/' \
-    -e 's/^## Validar$/## Validate/' \
-    -e 's/^## Humano$/## Human/' \
+    -e 's/^## Validar$/## Todo/' \
+    -e 's/^## Validate$/## Todo/' \
+    -e 's/^## Need$/## Todo/' \
     -e 's/^## Fechado$/## Closed/' \
     -e 's/\(nada ainda\)/(nothing yet)/g')"
-  if ! printf '%s\n' "$content" | grep -qx '## Description'; then
-    out=""
-    seen=0
-    inserted=0
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      if [[ $seen -eq 1 && "$line" == "## "* ]]; then
-        out+="## Description"$'\n'$'\n'
-        inserted=1
-        seen=0
-      fi
-      [[ "$line" == "## Thread" ]] && seen=1
-      out+="$line"$'\n'
-    done <<<"$content"
-    [[ $inserted -eq 0 ]] && out+="## Description"$'\n'$'\n'
-    content="$out"
-  fi
+
+  # Drop removed sections (Description / Human and PT aliases) — body discarded.
+  content="$(printf '%s\n' "$content" | awk '
+    BEGIN { skip=0 }
+    /^## (Description|Descricao|Human|Humano)$/ { skip=1; next }
+    /^## / { skip=0 }
+    skip { next }
+    { print }
+  ')"
+
   atomic_write "$content"
+
+  # Ensure Wait exists (after Now)
   if ! grep -qx '## Wait' "$NOTE" 2>/dev/null; then
     _ensure_heading_after "## Now" "## Wait"
+  fi
+  # Ensure Todo exists (after Wait); seed placeholder if empty section missing entirely
+  if ! grep -qx '## Todo' "$NOTE" 2>/dev/null; then
+    _ensure_heading_after "## Wait" "## Todo"
+    # If Todo body is empty, seed placeholder
+    if ! grep -qE '^- \[[ xX]\] ' "$NOTE" 2>/dev/null; then
+      # append placeholder under Todo if no checkboxes in file
+      replace_section "Todo" "$PLACEHOLDER_VALIDATE" 2>/dev/null || true
+    fi
   fi
 }
 
@@ -485,7 +516,7 @@ append_section_line() {
   else
     body+=$'\n'"$line"
   fi
-  if [[ "$name" == "Validate" ]]; then
+  if [[ "$name" == "Todo" ]]; then
     body="$(printf '%s\n' "$body" | grep -vF -- "$PLACEHOLDER_VALIDATE" || true)"
     [[ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]] && body="$line"
   fi
@@ -505,24 +536,6 @@ cmd_thread() {
   ok_write thread "$text"
 }
 
-cmd_description() {
-  local append=0
-  if [[ "${1:-}" == "--append" || "${1:-}" == "-a" ]]; then
-    append=1
-    shift
-  fi
-  local text="$*"
-  [[ -n "$text" ]] || { printf '%s\n' "$MSG_USAGE_DESCRIPTION" >&2; exit 2; }
-  [[ -f "$NOTE" ]] || cmd_init >/dev/null
-  ensure_schema
-  if [[ $append -eq 1 ]]; then
-    append_section_line "Description" "$text"
-  else
-    replace_section "Description" "$text"
-  fi
-  ok_write description "$text"
-}
-
 cmd_now() {
   local text="$*"
   [[ -n "$text" ]] || { printf '%s\n' "$MSG_USAGE_NOW" >&2; exit 2; }
@@ -532,14 +545,18 @@ cmd_now() {
   ok_write now "$text"
 }
 
-cmd_validate() {
+cmd_todo() {
   local text="$*"
-  [[ -n "$text" ]] || { printf '%s\n' "$MSG_USAGE_VALIDATE" >&2; exit 2; }
+  [[ -n "$text" ]] || { printf '%s\n' "$MSG_USAGE_TODO" >&2; exit 2; }
   [[ -f "$NOTE" ]] || cmd_init >/dev/null
   ensure_schema
-  append_section_line "Validate" "- [ ] $text"
-  ok_write validate "$text"
+  append_section_line "Todo" "- [ ] $text"
+  ok_write todo "$text"
 }
+
+# Aliases: muscle memory
+cmd_validate() { cmd_todo "$@"; }
+cmd_need() { cmd_todo "$@"; }
 
 cmd_wait() {
   local text="$*"
@@ -568,28 +585,86 @@ cmd_status() {
       return 0
       ;;
     --show|show|path|--path)
-      local src user def active
+      local src user def pack_id
+      pack_id="$(_status_catalog pack-id 2>/dev/null | tr -d '\r' || true)"
       src="$(_status_catalog source 2>/dev/null | tr -d '\r' || true)"
       user="$(_statuses_user_file)"
       def="$(_statuses_default_file 2>/dev/null || true)"
+      printf 'active pack:  %s\n' "${pack_id:-generic}"
       printf 'pack source:  %s\n' "${src:-builtin/fallback}"
-      printf 'user file:    %s' "$user"
-      if [[ -f "$user" ]]; then
-        printf '  (exists — active override)\n'
+      printf 'user overlay: %s' "$user"
+      if [[ -f "$user" && -z "${MN_STATUSES:-}" ]]; then
+        printf '  (exists — merged on top of pack)\n'
+      elif [[ -n "${MN_STATUSES:-}" && -f "${MN_STATUSES}" ]]; then
+        printf '  (MN_STATUSES path override)\n'
       else
-        printf '  (missing — using default)\n'
+        printf '  (none)\n'
       fi
-      printf 'default file: %s\n' "${def:-(not found)}"
+      printf 'pack file:    %s\n' "${def:-(not found)}"
+      printf 'config:       %s  (pack=…)\n' "$CONFIG_FILE"
       printf '\nEffective statuses:\n'
       cmd_status --list
       return 0
+      ;;
+    pack|--pack)
+      shift || true
+      local sub="${1:-}"
+      case "$sub" in
+        ""|show)
+          printf '%s\n' "$(_status_catalog pack-id 2>/dev/null | tr -d '\r' || echo generic)"
+          return 0
+          ;;
+        list|--list|-l)
+          local line id label desc
+          printf 'Built-in status packs:\n'
+          while IFS=$'\t' read -r id label desc; do
+            [[ -z "$id" ]] && continue
+            local mark=" "
+            [[ "$id" == "$(_status_catalog pack-id 2>/dev/null | tr -d '\r')" ]] && mark="*"
+            printf '  %s %-10s  %s\n' "$mark" "$id" "$label"
+            [[ -n "$desc" ]] && printf '               %s\n' "$desc"
+          done < <(_status_catalog packs)
+          printf '\n* = active   set: mn status pack <id>\n'
+          printf 'user overlay: mn status init  →  edit ~/.config/mn/statuses.json\n'
+          return 0
+          ;;
+        generic|ai-dev)
+          if ! _statuses_pack_file "$sub" >/dev/null 2>&1; then
+            printf 'mn: pack file not found for %s\n' "$sub" >&2
+            exit 1
+          fi
+          _config_set pack "$sub"
+          # bust any cached env
+          printf 'mn: status pack → %s\n' "$sub"
+          printf '    config: %s\n' "$CONFIG_FILE"
+          printf '    list:   mn status --list\n'
+          return 0
+          ;;
+        help|--help)
+          cat <<'EOF'
+mn status pack — choose built-in status set
+
+  mn status pack              print active pack id
+  mn status pack list         list built-in packs (* = active)
+  mn status pack generic      native: idle · working · blocked · ready
+  mn status pack ai-dev       AI stages: design → plan → code → review
+
+Personal overlay (optional): mn status init → edit statuses.json
+Full path override: MN_STATUSES=/path/to.json  or  statuses= in config
+EOF
+          return 0
+          ;;
+        *)
+          printf 'mn: unknown pack %s — try: mn status pack list\n' "$sub" >&2
+          exit 2
+          ;;
+      esac
       ;;
     --init|init)
       local force=0 dest src
       shift || true
       [[ "${1:-}" == "--force" || "${1:-}" == "-f" ]] && force=1
-      dest="$(_statuses_user_file)"
-      # Never write into a random MN_STATUSES path without parent dir
+      dest="$CONFIG_DIR/statuses.json"
       mkdir -p "$(dirname "$dest")"
       if [[ -f "$dest" && $force -eq 0 ]]; then
         printf 'mn: already exists %s\n' "$dest" >&2
@@ -598,20 +673,21 @@ cmd_status() {
         exit 1
       fi
       src="$(_statuses_default_file)" || {
-        printf 'mn: cannot find schemas/statuses.default.json\n' >&2
+        printf 'mn: cannot find pack JSON under schemas/packs/\n' >&2
         exit 1
       }
       cp "$src" "$dest"
-      printf 'mn: wrote %s\n' "$dest"
+      printf 'mn: wrote user overlay %s\n' "$dest"
+      printf '    (merged on top of pack=%s)\n' "$(_status_catalog pack-id 2>/dev/null | tr -d '\r' || echo generic)"
       printf '    edit labels/order/statuses, then: mn status --list\n'
       printf '    every status needs intent ignore|act; blocked should set requiresWait: true\n'
       return 0
       ;;
     --edit|edit)
       local dest
-      dest="$(_statuses_user_file)"
+      dest="$CONFIG_DIR/statuses.json"
       if [[ ! -f "$dest" ]]; then
-        printf 'mn: no user pack at %s\n' "$dest" >&2
+        printf 'mn: no user overlay at %s\n' "$dest" >&2
         printf '    run: mn status init\n' >&2
         exit 1
       fi
@@ -623,32 +699,35 @@ cmd_status() {
       ;;
     --help|help)
       cat <<'EOF'
-mn status — set card status, or manage the status catalog
+mn status — set card status, or manage status packs
 
 Set status on the card
   mn status <id>
   mn status blocked -- "what is blocking"
-  mn status working          # alias → coding
 
-Catalog
-  mn status --list           effective statuses (glyph · id · label · intent)
-  mn status show             which pack is active + paths
-  mn status init             copy default pack → ~/.config/mn/statuses.json
-  mn status init --force     overwrite user pack with default
-  mn status edit             open user pack in $EDITOR
+Built-in packs
+  mn status pack list         generic (default) · ai-dev
+  mn status pack generic      native 4 statuses
+  mn status pack ai-dev       design → plan → code → review
+  mn status show              active pack + paths + list
 
-Override resolution (first hit wins)
-  1. $MN_STATUSES
-  2. statuses= in ~/.config/mn/config
-  3. ~/.config/mn/statuses.json
-  4. schemas/statuses.default.json (ai-dev pack)
+Personal overlay (optional)
+  mn status init              copy active pack → ~/.config/mn/statuses.json
+  mn status init --force      overwrite overlay
+  mn status edit              $EDITOR on overlay
+  mn status --list            effective statuses after merge
 
-Custom pack tips
-  - Copy with init, then edit: order[], statuses{}, aliases{}
-  - Each status: intent (ignore|act), glyph (prefer width-1), label, optional badge
-  - requiresWait: true  → ## Wait required (like blocked)
-  - Partial override: only list statuses you patch; merge deep-merges by id
-  - If you set "order", it replaces the full picker order
+Resolution
+  1. $MN_STATUSES file (full base override)
+  2. statuses= path in ~/.config/mn/config
+  3. Built-in pack from pack= in config (default: generic)
+  4. Deep-merge ~/.config/mn/statuses.json if present
+
+Custom overlay tips
+  - Each status: intent (ignore|act), glyph, label, optional badge
+  - requiresWait: true → ## Wait required
+  - Partial overlay: only patch statuses you change (deep-merge by id)
+  - "order" in overlay replaces the full picker order
 EOF
       return 0
       ;;
@@ -701,25 +780,6 @@ EOF
   fi
 }
 
-cmd_human() {
-  local text="$*"
-  local replace=0
-  if [[ "${1:-}" == "--replace" ]]; then
-    replace=1
-    shift
-    text="$*"
-  fi
-  [[ -n "$text" ]] || { printf '%s\n' "$MSG_USAGE_HUMAN" >&2; exit 2; }
-  [[ -f "$NOTE" ]] || cmd_init >/dev/null
-  ensure_schema
-  if [[ $replace -eq 1 ]]; then
-    replace_section "Human" "$text"
-  else
-    append_section_line "Human" "$text"
-  fi
-  ok_write human "$text"
-}
-
 cmd_close() {
   local text="$*"
   [[ -n "$text" ]] || { printf '%s\n' "$MSG_USAGE_CLOSE" >&2; exit 2; }
@@ -729,12 +789,15 @@ cmd_close() {
   ok_write close "$text"
 }
 
-cmd_clear_validate() {
+cmd_clear_todo() {
   [[ -f "$NOTE" ]] || cmd_init >/dev/null
   ensure_schema
-  replace_section "Validate" "$PLACEHOLDER_VALIDATE"
-  ok_write clear-validate
+  replace_section "Todo" "$PLACEHOLDER_VALIDATE"
+  ok_write clear-todo
 }
+
+cmd_clear_validate() { cmd_clear_todo "$@"; }
+cmd_clear_need() { cmd_clear_todo "$@"; }
 
 cmd_touch() {
   require_note
@@ -748,7 +811,7 @@ cmd_done() {
   ensure_schema
   local arg="${*:-}"
   local body new_body
-  body="$(extract_section "Validate")"
+  body="$(extract_section "Todo")"
   if [[ -z "$arg" ]]; then
     new_body="$(printf '%s\n' "$body" | awk '
       !done && /^- \[ \] / { sub(/^- \[ \] /, "- [x] "); done=1 }
@@ -769,7 +832,7 @@ cmd_done() {
       { print }
     ')"
   fi
-  replace_section "Validate" "$(printf '%s\n' "$new_body" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+  replace_section "Todo" "$(printf '%s\n' "$new_body" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
   ok_write done "${arg:-first}"
 }
 
@@ -785,7 +848,7 @@ cmd_check() {
   updated="$(printf '%s\n' "$meta" | sed -n '1p')"
   status="$(printf '%s\n' "$meta" | sed -n '2p')"
 
-  for h in Thread Description Now Wait Validate Human Closed; do
+  for h in Thread Now Wait Todo Closed; do
     if ! grep -qx "## $h" "$NOTE"; then
       msg "$MSG_CHECK_HEADING" "$h"
       errs=1
@@ -817,16 +880,16 @@ cmd_check() {
   fi
 
   local val_body open_items has_placeholder
-  val_body="$(extract_section "Validate")"
+  val_body="$(extract_section "Todo")"
   has_placeholder=0
   printf '%s\n' "$val_body" | grep -qF -- "$PLACEHOLDER_VALIDATE" && has_placeholder=1
   open_items="$(printf '%s\n' "$val_body" | grep -cE -- '^- \[[ xX]\] ' || true)"
   if [[ "$has_placeholder" -eq 0 && "$open_items" -eq 0 ]]; then
     if [[ -z "$(printf '%s' "$val_body" | tr -d '[:space:]')" ]]; then
-      printf '%s\n' "$MSG_CHECK_VALIDATE_EMPTY"
+      printf '%s\n' "$MSG_CHECK_TODO_EMPTY"
       errs=1
     else
-      printf '%s\n' "$MSG_CHECK_VALIDATE_NO_CB"
+      printf '%s\n' "$MSG_CHECK_TODO_NO_CB"
       errs=1
     fi
   fi
@@ -839,8 +902,8 @@ cmd_check() {
 
 count_open_validate() {
   # Count real open items only — exclude the empty-state placeholder so
-  # `status: ready` + only "- [ ] (nothing yet)" does not show "1 to validate".
-  extract_section "Validate" 2>/dev/null \
+  # `status: ready` + only "- [ ] (nothing yet)" does not show "1 open todo".
+  extract_section "Todo" 2>/dev/null \
     | grep -E -- '^- \[ \] ' \
     | grep -vF -- "$PLACEHOLDER_VALIDATE" \
     | grep -vF -- '- [ ] (nada ainda)' \
@@ -855,7 +918,7 @@ _section_nonempty() {
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
     [[ "$line" =~ ^-[[:space:]]*$ ]] && continue
-    if [[ "$name" == "Validate" ]]; then
+    if [[ "$name" == "Todo" ]]; then
       [[ "$line" == "- [ ] (nothing yet)" || "$line" == "- [ ] (nada ainda)" ]] && continue
     fi
     if [[ "$name" == "Closed" && "$line" == "-" ]]; then
@@ -894,23 +957,10 @@ _print_short_block() {
   fi
 }
 
-# Details: muted body only, same indent as thread body — no blank line above.
-# Call right after thread with trailing-blank suppressed so it sits flush.
-_print_details_block() {
-  local body line
-  _section_nonempty "Description" || return 0
-  body="$(extract_section "Description" 2>/dev/null || true)"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
-    printf '     %s%s%s\n' "$C_DIM" "$line" "$C_RESET"
-  done <<<"$body"
-  printf '\n'
-}
-
-_print_validate() {
+_print_todo() {
   local body line t open_n=0
-  _section_nonempty "Validate" || return 0
-  body="$(extract_section "Validate" 2>/dev/null || true)"
+  _section_nonempty "Todo" || return 0
+  body="$(extract_section "Todo" 2>/dev/null || true)"
   # count open for badge on label
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ "$line" == "- [ ] "* ]] || continue
@@ -924,9 +974,9 @@ _print_validate() {
   status="$(get_meta | sed -n '2p')"
   [[ "$status" == "ready" || "$status" == "blocked" ]] && vcolor="$C_BOLD$C_GREEN"
   if [[ "$open_n" -gt 0 ]]; then
-    printf '  %s%s validate%s %s· %s open%s\n' "$vcolor" "$SYM_VALIDATE" "$C_RESET" "$C_DIM" "$open_n" "$C_RESET"
+    printf '  %s%s todo%s %s· %s open%s\n' "$vcolor" "$SYM_VALIDATE" "$C_RESET" "$C_DIM" "$open_n" "$C_RESET"
   else
-    printf '  %s%s validate%s\n' "$vcolor" "$SYM_VALIDATE" "$C_RESET"
+    printf '  %s%s todo%s\n' "$vcolor" "$SYM_VALIDATE" "$C_RESET"
   fi
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$(printf '%s' "$line" | tr -d '[:space:]')" ]] && continue
@@ -1035,18 +1085,9 @@ _show_card() {
   fi
 
   # Thread is always shown (required). Other blocks omit when empty.
-  # If details exist, suppress thread's trailing blank so description sits flush under body
-  # (same relation as now-content under the "now" title).
-  if _section_nonempty "Description"; then
-    _print_short_block "Thread" "thread" "$SYM_THREAD" "$C_CYAN" "     " "$C_WHITE" 1 1
-  else
-    _print_short_block "Thread" "thread" "$SYM_THREAD" "$C_CYAN" "     " "$C_WHITE" 1
-  fi
-  # Details (Description on disk): muted, no icon — continuation of thread
-  _print_details_block
+  _print_short_block "Thread" "thread" "$SYM_THREAD" "$C_CYAN" "     " "$C_WHITE" 1
   _print_short_block "Now" "now" "$SYM_NOW" "$C_YELLOW" "     " "$C_WHITE"
-  _print_validate
-  _print_short_block "Human" "human" "$SYM_HUMAN" "$C_MAGENTA" "     " "$C_DIM"
+  _print_todo
   _print_closed
 }
 
@@ -1106,33 +1147,34 @@ Read
 Write (quiet — one-line ok; use TUI or mn show for the card)
   mn init
   mn thread <text>
-  mn description [--append] <text>
   mn now <text>
   mn wait <text>              what is blocking (required when blocked)
-  mn validate <text>
-  mn status <id>              set status (catalog: ai-dev pack)
+  mn todo <text>              append Todo checklist item
+  mn validate <text>          alias → todo
+  mn status <id>              set status (from active pack)
   mn status --list            list statuses (glyph · id · label · intent)
+  mn status pack list|generic|ai-dev   built-in status sets
   mn status show              active pack + paths
-  mn status init [--force]    scaffold ~/.config/mn/statuses.json
-  mn status edit              open user pack in $EDITOR
-  mn status help              catalog + custom pack docs
+  mn status init [--force]    personal overlay → ~/.config/mn/statuses.json
+  mn status edit              open user overlay in $EDITOR
+  mn status help              packs + overlay docs
   mn status blocked -- <reason>   set blocked + wait in one shot
-  mn human [--replace] <text>
   mn close <text>
   mn done [n|text]
-  mn clear-validate
+  mn clear-todo
   mn touch
   mn +            interactive menu
 
-Statuses (default pack: ai-dev)
-  idle  designing  await-design  planning  review-plan
-  coding  review-code  blocked  ready
-  (alias: working → coding)
-  customize:  mn status init   →  edit  →  mn status --list
-  override:   ~/.config/mn/statuses.json  or  MN_STATUSES=path
+Status packs
+  generic (default)  idle · working · blocked · ready
+  ai-dev             design → plan → code → review
+  select:  mn status pack list | mn status pack <id>
+  TUI:     ,  (settings)
+  overlay: mn status init → ~/.config/mn/statuses.json
+  path:    MN_STATUSES=…  or  statuses= in config
 
 Shortcuts
-  t→thread  d→description  n→now  w→wait  v→validate  s→status  h→human  c→close
+  t→thread  n→now  w→wait  v→todo  s→status  c→close
 
 Env
   MN_FILE  MN_COLOR=0  NO_COLOR  MN_ASCII=1  MN_WATCH_INTERVAL
@@ -1231,13 +1273,11 @@ cmd_ui() {
 cmd_menu() {
   local options=(
     "$MSG_MENU_UI"
-    "$MSG_MENU_VALIDATE"
+    "$MSG_MENU_TODO"
     "$MSG_MENU_THREAD"
-    "$MSG_MENU_DESCRIPTION"
     "$MSG_MENU_NOW"
     "$MSG_MENU_STATUS"
     "$MSG_MENU_WAIT"
-    "$MSG_MENU_HUMAN"
     "$MSG_MENU_CLOSE"
     "$MSG_MENU_DONE"
     "$MSG_MENU_SHOW"
@@ -1266,17 +1306,13 @@ cmd_menu() {
   local text=""
   case "$choice" in
     ui*|*"blink"*) cmd_ui ;;
-    validate*|*"what I should"*)
-      printf '%s' "$MSG_PROMPT_VALIDATE"; read -r text
-      [[ -n "$text" ]] && cmd_validate "$text"
+    todo*|need*|validate*|*"what I should"*|*"verify"*)
+      printf '%s' "$MSG_PROMPT_TODO"; read -r text
+      [[ -n "$text" ]] && cmd_todo "$text"
       ;;
     thread*|*"short thread"*)
       printf '%s' "$MSG_PROMPT_THREAD"; read -r text
       [[ -n "$text" ]] && cmd_thread "$text"
-      ;;
-    description*|*"long thread"*|*"long context"*)
-      printf '%s' "$MSG_PROMPT_DESCRIPTION"; read -r text
-      [[ -n "$text" ]] && cmd_description "$text"
       ;;
     now*|*"happening"*)
       printf '%s' "$MSG_PROMPT_NOW"; read -r text
@@ -1303,15 +1339,11 @@ cmd_menu() {
       printf '%s' "$MSG_PROMPT_WAIT"; read -r text
       [[ -n "$text" ]] && cmd_wait "$text"
       ;;
-    human*|*"my note"*)
-      printf '%s' "$MSG_PROMPT_HUMAN"; read -r text
-      [[ -n "$text" ]] && cmd_human "$text"
-      ;;
     close*|*"closed"*)
       printf '%s' "$MSG_PROMPT_CLOSE"; read -r text
       [[ -n "$text" ]] && cmd_close "$text"
       ;;
-    done*|*"mark validate"*)
+    done*|*"mark todo"*|*"mark need"*|*"mark validate"*)
       printf '%s' "$MSG_PROMPT_DONE"; read -r text
       # shellcheck disable=SC2086
       cmd_done $text
@@ -1347,12 +1379,10 @@ main() {
 
   case "$cmd" in
     t) cmd="thread" ;;
-    d) cmd="description" ;;
     n) cmd="now" ;;
     w) cmd="wait" ;;
-    v) cmd="validate" ;;
+    v|e) cmd="todo" ;;
     s) cmd="status" ;;
-    h) cmd="human" ;;
     c) cmd="close" ;;
     +) cmd="menu" ;;
   esac
@@ -1367,15 +1397,14 @@ main() {
     help)            cmd_help ;;
     lang)            cmd_lang "$@" ;;
     thread)          cmd_thread "$@" ;;
-    description|desc|context) cmd_description "$@" ;;
     now)             cmd_now "$@" ;;
     wait|blocked-on) cmd_wait "$@" ;;
+    todo|need)       cmd_todo "$@" ;;
     validate)        cmd_validate "$@" ;;
     status)          cmd_status "$@" ;;
-    human)           cmd_human "$@" ;;
     close)           cmd_close "$@" ;;
     done)            cmd_done "$@" ;;
-    clear-validate)  cmd_clear_validate ;;
+    clear-todo|clear-need|clear-validate) cmd_clear_todo ;;
     touch)           cmd_touch ;;
     menu)            cmd_menu ;;
     *)

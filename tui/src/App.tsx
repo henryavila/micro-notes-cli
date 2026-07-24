@@ -7,15 +7,14 @@ import {
   detectIconSet,
   Header,
   Pane,
-  List,
   Footer,
-  Input,
   Dialog,
   Banner,
   ChoicePicker,
+  Cursor,
+  cellWidth,
   useTokens,
   useStdoutDimensions,
-  type ListRowData,
   type ChoiceItem,
   type IconSet,
 } from '@henryavila/blink-tui';
@@ -25,7 +24,7 @@ import {
   emptyNote,
   initNoteFile,
   notePath,
-  openValidateCount,
+  openTodoCount,
   readNoteFile,
   statusIds,
   statusRequiresWait,
@@ -34,23 +33,31 @@ import {
   withStatus,
   writeNoteFile,
 } from './note.js';
+import {
+  getConfiguredPackId,
+  listBuiltinPacks,
+  resetStatusCatalogCache,
+  setActivePack,
+  type PackMeta,
+} from './status-catalog.js';
 
 type Mode =
   | { kind: 'main' }
   | { kind: 'input'; field: InputField; draft: string; cursor: number }
   | { kind: 'status'; focus: number }
+  | { kind: 'settings'; focus: number }
   | { kind: 'help' };
 
-type InputField = 'thread' | 'description' | 'now' | 'wait' | 'human' | 'close' | 'validate';
+// SCHEMA v0.1 surface: Thread · Now · Wait · Todo · Closed
+// (no Human / Description — see SCHEMA-v0.1.md)
+type InputField = 'thread' | 'now' | 'wait' | 'close' | 'todo';
 
 const FIELD_TITLE: Record<InputField, string> = {
   thread: 'thread',
-  description: 'details',
   now: 'now',
   wait: 'blocked on',
-  human: 'human',
   close: 'close',
-  validate: 'todo',
+  todo: 'todo',
 };
 
 function shortPath(p: string): string {
@@ -65,11 +72,182 @@ function bodyLines(text: string): string[] {
   return t.split('\n');
 }
 
+/** Map a JS string cursor index onto a wrapped (row, col-in-row) for the caret. */
+function cursorOnWrapped(
+  value: string,
+  cursor: number,
+  width: number,
+): { rows: string[]; row: number; col: number } {
+  const w = Math.max(1, width);
+  const caret = Math.max(0, Math.min(value.length, Math.floor(cursor)));
+  const rows: string[] = [];
+  let row = 0;
+  let col = 0;
+  let found = caret === 0;
+
+  if (value.length === 0) {
+    return { rows: [''], row: 0, col: 0 };
+  }
+
+  let cur = '';
+  let curW = 0;
+  let i = 0;
+  while (i < value.length) {
+    if (value[i] === '\n') {
+      if (!found && i === caret) {
+        row = rows.length;
+        col = cur.length;
+        found = true;
+      }
+      rows.push(cur);
+      cur = '';
+      curW = 0;
+      i += 1;
+      if (!found && i === caret) {
+        row = rows.length;
+        col = 0;
+        found = true;
+      }
+      continue;
+    }
+    const cp = value.codePointAt(i)!;
+    const ch = String.fromCodePoint(cp);
+    const cw = Math.max(1, cellWidth(ch));
+    if (curW + cw > w && cur.length > 0) {
+      rows.push(cur);
+      cur = '';
+      curW = 0;
+    }
+    if (!found && i === caret) {
+      row = rows.length;
+      col = cur.length;
+      found = true;
+    }
+    cur += ch;
+    curW += cw;
+    i += ch.length;
+  }
+  rows.push(cur);
+  if (!found) {
+    // caret at end (or past last char)
+    row = rows.length - 1;
+    col = rows[row]!.length;
+  }
+  return { rows: rows.length > 0 ? rows : [''], row, col };
+}
+
+/**
+ * Multi-line presentational field for use *inside* a blink {@link Dialog}.
+ *
+ * Frameless on purpose: Dialog already draws the only Pane. Nesting another
+ * Pane (like blink's single-line Input) double-titles and shrinks the content
+ * box — easy to mis-measure and overflow the border.
+ *
+ * `width` must be the **content cells** available inside the Dialog body
+ * (outer width − outer borders − Pane padding − Dialog padding). When focused,
+ * one cell is reserved for the caret so a full-width line never spills.
+ */
+function WrappingInput({
+  value,
+  cursor,
+  focused,
+  placeholder,
+  width,
+}: {
+  value: string;
+  cursor: number;
+  focused?: boolean;
+  placeholder?: string;
+  /** Content width in cells (must fit inside Dialog body — not the outer width). */
+  width: number;
+}): React.ReactElement {
+  const tokens = useTokens();
+  const empty = value.length === 0;
+  // Reserve 1 cell for the blink caret while focused so before+caret never exceed `width`.
+  const wrapW = Math.max(1, focused ? width - 1 : width);
+  const { rows, row: cRow, col: cCol } = cursorOnWrapped(value, cursor, wrapW);
+
+  return (
+    <Box flexDirection="column" width={width} overflow="hidden">
+      {empty && !focused ? (
+        <Text color={tokens.fgDisabled} wrap="truncate-end">
+          {placeholder ?? ''}
+        </Text>
+      ) : empty && focused ? (
+        <Box flexDirection="row" width={width} overflow="hidden">
+          <Cursor active />
+          {placeholder ? (
+            <Text color={tokens.fgDisabled} wrap="truncate-end">
+              {placeholder}
+            </Text>
+          ) : null}
+        </Box>
+      ) : (
+        rows.map((line, ri) => {
+          if (!focused || ri !== cRow) {
+            return (
+              <Box key={ri} width={width} overflow="hidden">
+                <Text color={tokens.fg} wrap="truncate-end">
+                  {line.length === 0 ? ' ' : line}
+                </Text>
+              </Box>
+            );
+          }
+          const before = line.slice(0, cCol);
+          const after = line.slice(cCol);
+          return (
+            <Box key={ri} flexDirection="row" width={width} overflow="hidden">
+              <Text color={tokens.fg}>{before}</Text>
+              <Cursor active />
+              <Text color={tokens.fg} wrap="truncate-end">
+                {after}
+              </Text>
+            </Box>
+          );
+        })
+      )}
+    </Box>
+  );
+}
+
+/** Todo checklist rows — wrap long labels (blink List truncates by design). */
+function TodoList({
+  items,
+  focusIndex,
+}: {
+  items: Array<{ text: string; done: boolean }>;
+  focusIndex: number;
+}): React.ReactElement {
+  const tokens = useTokens();
+  return (
+    <Box flexDirection="column">
+      {items.map((v, i) => {
+        const focused = i === focusIndex;
+        const caret = focused ? '►' : ' ';
+        const mark = v.done ? '☑' : '☐';
+        const labelColor = v.done ? tokens.fgDim : tokens.fg;
+        return (
+          <Box key={i} flexDirection="row" marginTop={i === 0 ? 0 : 0}>
+            <Text color={focused ? tokens.accent : tokens.fgDim} wrap="wrap">
+              {caret} {mark}{' '}
+            </Text>
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text color={labelColor} wrap="wrap" dimColor={v.done}>
+                {v.text}
+              </Text>
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
 /**
  * Short block: icon + color label as visual separator.
  * Hidden when empty — unless `required` (Thread): always shown so the card is never blank.
  *
- * Optional `mutedLines` (e.g. description under thread) render in the same
+ * Optional `mutedLines` render in the same
  * indented body as the main lines — no extra gap, same relation as body ↔ title.
  */
 function ShortSection({
@@ -141,9 +319,11 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   const rows = Math.max(12, (termRows || 24) - 1);
   const [note, setNote] = useState<MicroNote>(() => readNoteFile(path) ?? emptyNote());
   const [mode, setMode] = useState<Mode>({ kind: 'main' });
-  const [focusValidate, setFocusValidate] = useState(0);
+  const [focusTodo, setFocusTodo] = useState(0);
   const [flash, setFlash] = useState<string | null>(null);
   const [missing, setMissing] = useState(() => !existsSync(path));
+  /** Bumps when pack changes so statusIds()/picker re-read the catalog. */
+  const [packEpoch, setPackEpoch] = useState(0);
   const writing = useRef(false);
 
   const reload = useCallback(() => {
@@ -187,8 +367,8 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         const n = readNoteFile(path);
         if (n) {
           setNote(n);
-          // keep validate focus in range after mutations
-          setFocusValidate((i) => Math.min(i, Math.max(0, n.validate.length - 1)));
+          // keep todo focus in range after mutations
+          setFocusTodo((i) => Math.min(i, Math.max(0, n.todo.length - 1)));
         }
         setMissing(false);
         setFlash('saved');
@@ -202,20 +382,12 @@ function AppInner({ path }: { path: string }): React.ReactElement {
     [path],
   );
 
-  const validateRows: ListRowData[] = useMemo(() => {
-    return note.validate.map((v, i) => ({
-      id: String(i),
-      label: v.text,
-      selected: v.done,
-    }));
-  }, [note.validate]);
+  const focusTodoIdx = Math.min(
+    focusTodo,
+    Math.max(0, note.todo.length - 1),
+  );
 
-  const focusId =
-    note.validate.length === 0
-      ? ''
-      : String(Math.min(focusValidate, Math.max(0, note.validate.length - 1)));
-
-  const statuses = useMemo(() => statusIds(), []);
+  const statuses = useMemo(() => statusIds(), [packEpoch]);
   const statusChoices: ChoiceItem[] = useMemo(
     () =>
       statuses.map((s) => ({
@@ -225,15 +397,14 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       })),
     [statuses],
   );
+  const packs: PackMeta[] = useMemo(() => listBuiltinPacks(), [packEpoch]);
+  const activePackId = useMemo(() => getConfiguredPackId(), [packEpoch]);
 
   const applyInput = (field: InputField, value: string) => {
-    const next: MicroNote = { ...note, validate: [...note.validate], closed: [...note.closed] };
+    const next: MicroNote = { ...note, todo: [...note.todo], closed: [...note.closed] };
     switch (field) {
       case 'thread':
         next.thread = value.trim();
-        break;
-      case 'description':
-        next.description = value;
         break;
       case 'now':
         next.now = value.trim();
@@ -242,21 +413,18 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         const w = value.trim();
         // Wait required while status requiresWait; empty is refused.
         if (statusRequiresWait(String(next.status)) && !w) {
-          setFlash('blocked needs reason');
+          setFlash('blocked: set wait');
           setTimeout(() => setFlash(null), 1200);
           return;
         }
         next.wait = w;
         break;
       }
-      case 'human':
-        next.human = value;
-        break;
       case 'close':
         if (value.trim()) next.closed = [...note.closed, value.trim()];
         break;
-      case 'validate':
-        if (value.trim()) next.validate = [...note.validate, { text: value.trim(), done: false }];
+      case 'todo':
+        if (value.trim()) next.todo = [...note.todo, { text: value.trim(), done: false }];
         break;
     }
     save(next);
@@ -273,9 +441,45 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       return;
     }
 
+    if (mode.kind === 'settings') {
+      if (key.escape || input === 'q' || input === ',') {
+        setMode({ kind: 'main' });
+        return;
+      }
+      if (key.upArrow || input === 'k') {
+        setMode({ kind: 'settings', focus: Math.max(0, mode.focus - 1) });
+        return;
+      }
+      if (key.downArrow || input === 'j') {
+        setMode({ kind: 'settings', focus: Math.min(packs.length - 1, mode.focus + 1) });
+        return;
+      }
+      if (key.return) {
+        const pack = packs[mode.focus];
+        if (!pack) return;
+        const res = setActivePack(pack.id);
+        if (!res.ok) {
+          setFlash(res.error);
+          setTimeout(() => setFlash(null), 1500);
+          return;
+        }
+        resetStatusCatalogCache();
+        setPackEpoch((e) => e + 1);
+        setFlash(`pack · ${pack.id}`);
+        setTimeout(() => setFlash(null), 1200);
+        setMode({ kind: 'main' });
+      }
+      return;
+    }
+
     if (mode.kind === 'status') {
       if (key.escape) {
         setMode({ kind: 'main' });
+        return;
+      }
+      if (input === ',') {
+        const idx = packs.findIndex((p) => p.id === activePackId);
+        setMode({ kind: 'settings', focus: idx >= 0 ? idx : 0 });
         return;
       }
       if (key.upArrow || input === 'k') {
@@ -354,10 +558,6 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       openInput('thread', note.thread);
       return;
     }
-    if (input === 'd') {
-      openInput('description', note.description);
-      return;
-    }
     if (input === 'n') {
       openInput('now', note.now);
       return;
@@ -367,16 +567,12 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       openInput('wait', note.wait);
       return;
     }
-    if (input === 'h') {
-      openInput('human', note.human);
-      return;
-    }
     if (input === 'c') {
       openInput('close', '');
       return;
     }
     if (input === 'v') {
-      openInput('validate', '');
+      openInput('todo', '');
       return;
     }
     if (input === 's' || input === 'e') {
@@ -384,21 +580,26 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       setMode({ kind: 'status', focus: idx >= 0 ? idx : 0 });
       return;
     }
+    if (input === ',') {
+      const idx = packs.findIndex((p) => p.id === activePackId);
+      setMode({ kind: 'settings', focus: idx >= 0 ? idx : 0 });
+      return;
+    }
 
-    if (note.validate.length > 0) {
+    if (note.todo.length > 0) {
       if (key.upArrow || input === 'k') {
-        setFocusValidate((i) => Math.max(0, i - 1));
+        setFocusTodo((i) => Math.max(0, i - 1));
         return;
       }
       if (key.downArrow || input === 'j') {
-        setFocusValidate((i) => Math.min(note.validate.length - 1, i + 1));
+        setFocusTodo((i) => Math.min(note.todo.length - 1, i + 1));
         return;
       }
       if (input === ' ' || input === 'x') {
-        const i = Math.min(focusValidate, note.validate.length - 1);
+        const i = Math.min(focusTodo, note.todo.length - 1);
         const next: MicroNote = {
           ...note,
-          validate: note.validate.map((item, idx) =>
+          todo: note.todo.map((item, idx) =>
             idx === i ? { ...item, done: !item.done } : item,
           ),
         };
@@ -407,31 +608,30 @@ function AppInner({ path }: { path: string }): React.ReactElement {
     }
   });
 
-  const openN = openValidateCount(note);
-  const listHeight = Math.max(
-    2,
-    Math.min(8, Math.max(note.validate.length, 1), Math.floor((rows || 30) * 0.25)),
-  );
-  const dialogW = Math.min(Math.max(40, (columns || 80) - 6), 72);
+  const openN = openTodoCount(note);
+  // Almost full terminal width so long edits wrap instead of clipping in a narrow modal.
+  const dialogW = Math.max(40, (columns || 80) - 4);
+  // Dialog anatomy (blink): outer Box width=dialogW
+  //   → Pane borders L/R (−2) + Pane paddingX=1 (−2) + Dialog body paddingX=1 (−2)
+  //   = content cells available for children.
+  const inputInnerW = Math.max(8, dialogW - 6);
   const threadLines = bodyLines(note.thread);
   const nowLines = bodyLines(note.now);
-  const humanLines = bodyLines(note.human);
-  const hasValidate = note.validate.length > 0;
+  const hasTodo = note.todo.length > 0;
   const hasClosed = note.closed.length > 0;
 
   if (mode.kind === 'help') {
     return (
-      <Box flexDirection="column" height={rows || 24} paddingX={1}>
+      <Box flexDirection="column" height={rows || 24} paddingX={1} width={columns}>
         <Header title="microNote" subtitle="keys" right="q back" />
         <Box flexDirection="column" marginTop={1}>
           {[
             't  thread (title)',
-            'd  details (muted context)',
             'n  now',
             'w  blocked on (required when blocked)',
-            'v  add todo (validate item)',
+            'v  add todo item',
             's  status picker',
-            'h  human note',
+            ',  settings (status pack)',
             'c  close decision',
             'j/k or arrows  move todo focus',
             'space / x  toggle todo item',
@@ -439,10 +639,11 @@ function AppInner({ path }: { path: string }): React.ReactElement {
             'i  init file (if missing)',
             'q  quit',
             '',
+            'packs: generic (default) · ai-dev  — also: mn status pack',
             'blocked status always asks what is blocking (Wait)',
             'empty blocks are hidden — not shown as (empty)',
           ].map((line) => (
-            <Text key={line} color={tokens.fg}>
+            <Text key={line} color={tokens.fg} wrap="wrap">
               {line}
             </Text>
           ))}
@@ -451,11 +652,66 @@ function AppInner({ path }: { path: string }): React.ReactElement {
     );
   }
 
+  if (mode.kind === 'settings') {
+    const packChoices: ChoiceItem[] = packs.map((p) => ({
+      id: p.id,
+      label: `${p.label}${p.id === activePackId ? '  · active' : ''}`,
+      state: p.id === activePackId ? 'ok' : 'pending',
+    }));
+    const focused = packs[mode.focus];
+    return (
+      <Box flexDirection="column" height={rows || 24} width={columns}>
+        <Header
+          title="settings"
+          subtitle="status pack"
+          right={`${activePackId} · esc back`}
+        />
+        <Box flexGrow={1} paddingX={1} paddingY={1} flexDirection="column">
+          <Pane title="status pack" tone="focus" flexGrow={1}>
+            <Box flexDirection="column">
+              <Text color={tokens.fgMuted} wrap="wrap">
+                Built-in sets. User overlay still applies if statuses.json exists.
+              </Text>
+              <Box marginTop={1}>
+                <ChoicePicker
+                  choices={packChoices}
+                  focusedId={focused?.id}
+                  height={Math.min(8, packs.length + 1)}
+                />
+              </Box>
+              {focused ? (
+                <Box marginTop={1} flexDirection="column">
+                  <Text color={tokens.accent} wrap="wrap">
+                    {focused.label} ({focused.id})
+                  </Text>
+                  <Text color={tokens.fgDim} wrap="wrap">
+                    {focused.description}
+                  </Text>
+                  <Text color={tokens.fgDim} wrap="wrap">
+                    CLI: mn status pack {focused.id}
+                  </Text>
+                </Box>
+              ) : null}
+            </Box>
+          </Pane>
+        </Box>
+        <Footer
+          keys={[
+            { k: '↑↓', desc: 'move' },
+            { k: 'enter', desc: 'use pack' },
+            { k: 'esc', desc: 'back' },
+          ]}
+          right={flash ?? activePackId}
+        />
+      </Box>
+    );
+  }
+
   if (mode.kind === 'status') {
     const pickTitle = statusTitle(statuses[mode.focus] ?? note.status);
     return (
       <Box flexDirection="column" height={rows || 24}>
-        <Header title={pickTitle} subtitle="pick status" right="esc cancel" />
+        <Header title={pickTitle} subtitle={`pick status · ${activePackId}`} right="esc cancel" />
         <Box flexGrow={1} paddingX={1} paddingY={1}>
           <Pane title={pickTitle} tone="focus" flexGrow={1}>
             <ChoicePicker
@@ -469,6 +725,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
           keys={[
             { k: '↑↓', desc: 'move' },
             { k: 'enter', desc: 'set' },
+            { k: ',', desc: 'packs' },
             { k: 'esc', desc: 'cancel' },
           ]}
         />
@@ -478,7 +735,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
 
   if (mode.kind === 'input') {
     return (
-      <Box flexDirection="column" height={rows || 24} justifyContent="center" alignItems="center">
+      <Box flexDirection="column" height={rows || 24} width={columns} justifyContent="center" alignItems="center">
         <Box width={dialogW} flexDirection="column">
           <Dialog
             title={FIELD_TITLE[mode.field]}
@@ -488,12 +745,13 @@ function AppInner({ path }: { path: string }): React.ReactElement {
             ]}
             width={dialogW}
           >
-            <Input
-              title={FIELD_TITLE[mode.field]}
+            {/* Frameless body: Dialog is the only border — keeps wrap width exact. */}
+            <WrappingInput
               value={mode.draft}
               cursor={mode.cursor}
               focused
               placeholder="type…"
+              width={inputInnerW}
             />
           </Dialog>
         </Box>
@@ -504,15 +762,14 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   const waitLines = bodyLines(note.wait);
   const isBlocked = statusRequiresWait(String(note.status));
   const needsWait = blockedNeedsWait(note);
+  // Header chrome stays short (one row); full wait/body text lives in the card and wraps.
   const rightBits =
     flash ??
     (note.status === 'ready' && openN > 0
-      ? `${openN} to validate`
+      ? `${openN} open todo`
       : isBlocked
         ? note.wait.trim()
-          ? note.wait.trim().length > 28
-            ? `needs you · ${note.wait.trim().slice(0, 25)}…`
-            : `needs you · ${note.wait.trim()}`
+          ? 'needs you'
           : 'needs you · set w'
         : statusTitle(String(note.status)));
 
@@ -564,9 +821,6 @@ function AppInner({ path }: { path: string }): React.ReactElement {
               color={tokens.accent}
               bodyColor={tokens.fg}
               lines={threadLines}
-              // details sit under thread body (same indent, no gap) — like now body under "now"
-              mutedLines={bodyLines(note.description)}
-              mutedColor={tokens.fgDim}
               first={!isBlocked}
               required
               emptyHint="set with t"
@@ -579,24 +833,17 @@ function AppInner({ path }: { path: string }): React.ReactElement {
               bodyColor={tokens.fg}
               lines={nowLines}
             />
-            {hasValidate ? (
+            {hasTodo ? (
               <Box flexDirection="column" marginTop={1}>
-                <Text color={tokens.stateOk ?? tokens.accent}>
+                <Text color={tokens.stateOk ?? tokens.accent} wrap="wrap">
                   ☐ todo
                   {openN > 0 ? (
                     <Text color={tokens.fgMuted}> · {openN} open</Text>
                   ) : null}
                 </Text>
-                <List rows={validateRows} focusedId={focusId} height={listHeight} />
+                <TodoList items={note.todo} focusIndex={focusTodoIdx} />
               </Box>
             ) : null}
-            <ShortSection
-              icon="✎"
-              label="human"
-              color={tokens.fgMuted}
-              bodyColor={tokens.fgMuted}
-              lines={humanLines}
-            />
             {hasClosed ? (
               <Box flexDirection="column" marginTop={1}>
                 <Text color={tokens.fgDim}>✓ closed</Text>
@@ -614,20 +861,19 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       </Box>
       <Footer
         keys={[
-          // Order = importance: Footer drops chips from the right when narrow.
+          // SCHEMA v0.1 keys — Footer drops chips from the right when narrow.
           { k: 't', desc: 'thread' },
           { k: 'n', desc: 'now' },
           ...(isBlocked ? ([{ k: 'w', desc: 'blocked on' }] as const) : []),
           { k: 'v', desc: 'todo' },
           { k: 's', desc: 'status' },
           { k: 'sp', desc: 'toggle' },
-          { k: 'h', desc: 'human' },
           { k: 'c', desc: 'close' },
-          { k: 'd', desc: 'details' },
+          { k: ',', desc: 'pack' },
           { k: '?', desc: 'help' },
           { k: 'q', desc: 'quit' },
         ]}
-        right={flash ? flash : needsWait ? 'need w' : `${openN} open`}
+        right={flash ? flash : needsWait ? 'set w' : `${openN} open · ${activePackId}`}
       />
     </Box>
   );

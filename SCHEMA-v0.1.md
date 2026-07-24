@@ -32,12 +32,12 @@ Topics ranked for multi-agent re-entry (30 min away):
 
 | Rank | Topic family | Keep as section? | Notes |
 |------|--------------|------------------|--------|
-| 1 | Ask-of-me / blocked-on-human | via **status=blocked** + **Wait** + **Need** | First-class attention |
-| 2 | Next human action | **Need** checklist | Human-facing only |
+| 1 | Ask-of-me / blocked-on-human | via **status=blocked** + **Wait** + **Todo** | First-class attention |
+| 2 | Next human action | **Todo** checklist | Human-facing only |
 | 3 | Wait-on | **Wait** | Distinct from Now |
 | 4 | Risk / blast radius / don’t-touch | **Closed** (as decisions) or optional later **Hold** | Avoid second prose dump |
 | 5 | Done-when | optional catalog later | Not default |
-| 6 | Last agent ask | fold into **Wait** / **Need** | Don’t duplicate Thread |
+| 6 | Last agent ask | fold into **Wait** / **Todo** | Don’t duplicate Thread |
 | 7 | Handle (branch/label) | **Thread** | Pane title may already show path |
 | 8 | Link / PR | optional catalog later | One token in Thread is enough for v0.1 |
 | 9 | Collision / ownership | optional later | Multi-agent only |
@@ -66,7 +66,7 @@ one line: what is happening
 
 ## Wait
 
-## Need
+## Todo
 - [ ] (nothing yet)
 
 ## Closed
@@ -94,7 +94,7 @@ one line: what is happening
 | `thread` | Thread | prose (single-line culture) | replace | yes (non-empty) | Q1 |
 | `now` | Now | prose (1–2 lines) | replace (never append) | no | Q2 |
 | `wait` | Wait | prose (single-line) | replace | when `status=blocked` | Q3/Q4 blocker |
-| `need` | Need | checklist | append / toggle done / clear | has placeholder or ≥1 item; when `ready` ≥1 open preferred | Q4 |
+| `todo` | Todo | checklist | append / toggle done / clear | has placeholder or ≥1 item; when `ready` ≥1 open preferred | Q4 |
 | `closed` | Closed | bullet list | append | heading present (body may be empty) | don’t re-argue |
 
 ### Field culture
@@ -104,7 +104,7 @@ one line: what is happening
 | **Thread** | Label, not essay (~80 chars). e.g. `Paddle webhooks — idempotency` |
 | **Now** | Present state only. **Overwrite always.** |
 | **Wait** | One sentence: what stream is waiting on. Clear when unblocked. |
-| **Need** | Human verify/decide items only — not agent task graph. Cap ~7 open. |
+| **Todo** | Human verify/decide items only — not agent task graph. Cap ~7 open. |
 | **Closed** | Settled decisions, one line each. No timestamps. |
 
 ### Status ↔ body coupling (`mn check` later)
@@ -113,8 +113,8 @@ one line: what is happening
 |--------|----------|
 | `idle` | Thread set; Wait empty |
 | `working` | Now fresh; Wait empty |
-| `blocked` | **Wait non-empty**; Need = decisions/questions |
-| `ready` | Wait empty; **≥1 open Need item** |
+| `blocked` | **Wait non-empty**; Todo = decisions/questions |
+| `ready` | Wait empty; **≥1 open Todo item** |
 
 ### Removed vs previous draft
 
@@ -122,7 +122,7 @@ one line: what is happening
 |-----|--------|
 | **Human** | **Delete** — tautology on a human-only card |
 | **Description** | **Delete from default** — diary-creep; long context lives in plan/PR/session |
-| **Validate** | **Rename → Need** (covers verify *and* decide under `blocked`) |
+| **Validate** | **Rename → Todo** (covers verify *and* decide under `blocked`) |
 
 ---
 
@@ -133,15 +133,15 @@ one line: what is happening
 | `mn thread "…"` | `t` | replace Thread |
 | `mn now "…"` | `n` | replace Now |
 | `mn wait "…"` | `w` | replace Wait |
-| `mn need "…"` | `e` | append Need checkbox *(or keep `v` as alias)* |
-| `mn done …` | space/x in TUI | mark Need done |
+| `mn todo "…"` | `v` | append Todo checkbox (`e` alias) |
+| `mn done …` | space/x in TUI | mark Todo done |
 | `mn status …` | `s` | set status |
 | `mn close "…"` | `c` | append Closed |
-| `mn clear-need` | — | reset Need placeholder |
+| `mn clear-todo` | — | reset Todo placeholder |
 
 **Removed:** `mn human`, `mn description`, keys `h` / `d` (free for remap).
 
-**Aliases for muscle memory (optional):** `mn validate` → `need`, `mn fio` legacy drop (EN-only).
+**Aliases for muscle memory (optional):** `mn validate` → `todo`, `mn fio` legacy drop (EN-only).
 
 ---
 
@@ -168,7 +168,7 @@ one line: what is happening
 ### Recommended model: **catalog + profile** (not freeform)
 
 1. **Product owns a fixed catalog of section IDs and types** (engine understands only known types: `prose` | `checklist` | `list` + fixed status meta).
-2. **Default profile** enables: `thread`, `now`, `wait`, `need`, `closed`.
+2. **Default profile** enables: `thread`, `now`, `wait`, `todo`, `closed`.
 3. **User profile** may:
    - hide optional sections (e.g. hide `closed`, hide `wait` if they hate it — not recommended)
    - reorder enabled sections
@@ -177,7 +177,7 @@ one line: what is happening
 4. User may **not**:
    - invent new types
    - change status enum
-   - remove core identity: `status`, `thread`, `need` (minimum product)
+   - remove core identity: `status`, `thread`, `todo` (minimum product)
 
 ### File format — `schema.json`
 
@@ -200,15 +200,15 @@ Path resolution (later):
     { "id": "now",    "heading": "Now",    "type": "prose",     "required": false, "cli": "now",    "key": "n", "mode": "replace" },
     { "id": "wait",   "heading": "Wait",   "type": "prose",     "required": false, "cli": "wait",   "key": "w", "mode": "replace",
       "required_when_status": ["blocked"] },
-    { "id": "need",   "heading": "Need",   "type": "checklist", "required": true,  "cli": "need",   "key": "e", "mode": "append",
+    { "id": "todo",   "heading": "Todo",   "type": "checklist", "required": true,  "cli": "todo",   "key": "v", "mode": "append",
       "placeholder": "(nothing yet)" },
     { "id": "closed", "heading": "Closed", "type": "list",      "required": false, "cli": "close",  "key": "c", "mode": "append" }
   ]
 }
 ```
 
-**On disk MD:** prefer canonical English headings from schema (or fixed IDs mapped to EN) so agents/`mn need` stay stable.  
-**CLI verbs:** always English (`thread`, `need`, …) — never renamed with labels.
+**On disk MD:** prefer canonical English headings from schema (or fixed IDs mapped to EN) so agents/`mn todo` stay stable.  
+**CLI verbs:** always English (`thread`, `todo`, …) — never renamed with labels.
 
 ### Install UX
 
@@ -223,7 +223,7 @@ Path resolution (later):
 Example install flow:
 
 ```text
-→ schema: default (Thread, Now, Wait, Need, Closed)
+→ schema: default (Thread, Now, Wait, Todo, Closed)
   customize later: mn schema init && $EDITOR ~/.config/mn/schema.json
 ```
 
@@ -239,7 +239,7 @@ Or non-interactive:
 - `version` present and supported  
 - Every `id` ∈ product catalog (or known optional catalog)  
 - `type` matches catalog for that `id`  
-- At least `thread` + `need` + status meta present  
+- At least `thread` + `todo` + status meta present  
 - No duplicate `id` / `key` / `cli`  
 - Fail closed with clear error if invalid  
 
@@ -258,7 +258,7 @@ Without SSOT, “custom schema” doubles CLI/TUI drift.
 
 | Work | Effort |
 |------|--------|
-| Default schema v0.1 only (drop Human/Description, add Wait, rename Need) | Small–medium (one coherent break) |
+| Default schema v0.1 only (drop Human/Description, add Wait, rename Todo) | Small–medium (one coherent break) |
 | Internal `schemas/default.json` + loaders | Medium |
 | User override + install copy + validate | Medium (after SSOT) |
 | Freeform D/E | Large — defer |
@@ -273,7 +273,7 @@ Breaking is OK. Suggested one-shot rules if old files exist:
 |-------------|--------|
 | Human | drop body (or append non-empty lines into Closed as decisions) |
 | Description | drop (or one-line into Thread if Thread empty) |
-| Validate | rename → Need |
+| Validate | rename → Todo |
 | Fio/Agora/… PT | drop PT migration long-term; one-shot map if still present |
 
 No dual-format support after v0.1 ship — keep the tool thin.
@@ -290,7 +290,7 @@ No dual-format support after v0.1 ship — keep the tool thin.
 Thread  Paddle webhooks — idempotency
 Now     tests green; PR open
 Wait    —
-Need    ☐ npm test -- webhook
+Todo    ☐ npm test -- webhook
         ☐ same key does not double-charge
 Closed  • Stripe discarded — Paddle only
 ```
@@ -303,7 +303,7 @@ Closed  • Stripe discarded — Paddle only
 Thread  inbox → UI import
 Now     stopped at dual-write decision
 Wait    decide: cutover now vs dual-write 1 week
-Need    ☐ pick cutover vs dual-write
+Todo    ☐ pick cutover vs dual-write
         ☐ if cutover: no open inbox jobs
 Closed  • skill owns card creation end-to-end
 ```
@@ -316,19 +316,20 @@ Closed  • skill owns card creation end-to-end
 Thread  PR2/PR4 merge conflicts
 Now     resolving package-lock
 Wait    —
-Need    ☐ smoke web after merge
+Todo    ☐ smoke web after merge
 Closed  —
 ```
 
 ---
 
-## 8. Open decisions (need your call)
+## 8. Open decisions (resolved in code)
 
-1. **Rename Validate → Need** — recommended yes; or keep `Validate` for continuity?  
-2. **Wait as first-class** — recommended yes; or fold into Need only?  
-3. **Custom schema scope in first ship** — (a) default only + SSOT file in repo, (b) user `schema.json` hide/reorder/relabel, (c) full install wizard  
-4. **CLI key for Need** — `e` vs keep `v` (validate muscle memory)  
-5. **Version string** — bump package/`MN_VERSION` to `0.1.0` for the redesign?
+1. **Rename Validate → Todo** — **yes** (disk `## Todo`; parse legacy `## Validate` / `## Need`)  
+2. **Wait as first-class** — **yes**  
+3. **Custom schema scope** — **(a) default sections only** for now; status pack is separate (`statuses.json` ai-dev)  
+4. **CLI key for Todo** — **`v` primary** (and `e` alias); command `mn todo` (`mn need` / `mn validate` aliases)  
+5. **Version string** — leave package version as-is until release cut  
+6. **Status enum** — SCHEMA lists 4 fixed statuses; **product uses ai-dev pack** (idle…ready + design/plan/code stages) via catalog — intentional extension, not a regression  
 
 ---
 
@@ -336,9 +337,9 @@ Closed  —
 
 1. Lock answers in §8  
 2. Add `schemas/default.json` + rewrite template  
-3. Update `note.ts` parse/serialize + drop Human/Description  
+3. Update `note.ts` parse/serialize + drop Human/Description; checklist = Todo  
 4. Update `bin/mn` commands/check/show/menu  
-5. Update TUI keys + render (dim empty Wait/Closed)  
+5. Update TUI keys + render  
 6. Rewrite tests  
 7. (Optional same release) schema loader + `mn schema show|init` + install copy  
 8. Align README + PLAN; set version `0.1.0`
@@ -347,5 +348,5 @@ Closed  —
 
 ## 10. One-line product + schema
 
-> **microNote v0.1** is a human sticky per worktree: **status + Thread + Now + Wait + Need + Closed** — re-enter in seconds; agents may fill it, never own it.  
+> **microNote v0.1** is a human sticky per worktree: **status + Thread + Now + Wait + Todo + Closed** — re-enter in seconds; agents may fill it, never own it.  
 > **Customization** is a validated profile over a fixed section catalog, not freeform markdown types.

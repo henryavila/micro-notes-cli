@@ -7,7 +7,21 @@
 
 Language: **English only** for now (file format + commands + UI). pt-BR later.
 
-Default **status pack: `ai-dev`** — stages for design → plan → implement → review with AI agents. Override via `~/.config/mn/statuses.json` or `MN_STATUSES`.
+**Status packs** (choose one built-in set; optional personal overlay):
+
+| Pack | Statuses | When |
+|------|----------|------|
+| **`generic`** (default) | idle · working · blocked · ready | native re-entry |
+| **`ai-dev`** | design → plan → code → review stages | multi-agent worktrees |
+
+```bash
+mn status pack list          # * = active
+mn status pack generic
+mn status pack ai-dev
+# installer: ./install.sh --pack ai-dev
+# TUI: press ,  (settings → status pack)
+# personal overlay: mn status init → edit ~/.config/mn/statuses.json
+```
 
 ## Install
 
@@ -27,14 +41,13 @@ Ensure `~/.local/bin` is on `PATH` (the installer can write a shell rc block).
 cd /path/to/worktree
 mn init
 mn thread "webhooks Paddle — idempotency"
-mn description "long context so re-entry makes sense…"
 mn now "writing tests"
-mn validate "npm test -- webhook"
+mn todo "npm test -- webhook"
 mn status coding
 # or: mn status review-plan | review-code | ready | …
 
 mn status blocked -- "cutover now vs dual-write?"   # Wait required
-mn wait "need product decision on API shape"         # update reason
+mn wait "product decision on API shape"              # update reason
 
 mn              # TTY → blink TUI
 mn show         # one-shot card (no TUI)
@@ -139,17 +152,15 @@ When status **requires wait** (`blocked`):
 - Card shows **blocked on** first (CLI + TUI)
 - Leaving blocked (any other status) **clears** Wait
 
-## TUI keys
+## TUI keys (SCHEMA v0.1)
 
 | Key | Action |
 |-----|--------|
 | `t` | edit thread (short label) |
-| `d` | edit details (description on disk; muted under thread) |
 | `n` | edit now |
 | `w` | blocked on (`## Wait` — required when blocked) |
-| `v` | add todo (validate item) |
+| `v` | add todo item |
 | `s` | status picker (full catalog) |
-| `h` | human note |
 | `c` | close decision |
 | `j` / `k` or arrows | move todo focus |
 | `space` / `x` | toggle todo item |
@@ -159,13 +170,15 @@ When status **requires wait** (`blocked`):
 | `q` | quit |
 
 Footer chips (priority order; drops from the right on narrow terminals):  
-`t` `n` `w`\* `v` `s` `sp` `h` `c` `d` `?` `q` — \*`w` only while blocked.
+`t` `n` `w`* `v` `s` `sp` `c` `?` `q` — \*`w` only while blocked.
 
-Empty sections are **hidden** (no `(empty)` placeholders). Thread always shows (hint `set with t` if blank). Description sits **flush under thread** body (same indent, muted).
+**Removed from SCHEMA v0.1:** `h`/Human, `d`/Description (and `## Validate` / `## Need` → `## Todo`).
+
+Empty sections are **hidden**. Thread always shows (hint `set with t` if blank).
 
 External `mn thread …` / agent writes update the file; the TUI **reloads** via `fs.watch`.
 
-## File format (`MICRONOTE.md`)
+## File format (`MICRONOTE.md`) — SCHEMA v0.1
 
 ```markdown
 # microNote
@@ -173,10 +186,7 @@ updated: HH:MM
 status: idle|designing|await-design|planning|review-plan|coding|review-code|blocked|ready
 
 ## Thread
-short label
-
-## Description
-long re-entry context (shown muted under thread in UI)
+short label — stream identity
 
 ## Now
 what is happening
@@ -184,25 +194,21 @@ what is happening
 ## Wait
 what is blocking (required when status=blocked; cleared when unblocked)
 
-## Validate
+## Todo
 - [ ] (nothing yet)
-
-## Human
 
 ## Closed
 -
 ```
 
-Legacy PT files (`## Fio`, `atualizado:`, `## Espera` / `## Bloqueio`, …) migrate automatically on read/write.
+Legacy files (`## Validate`, `## Description`, `## Human`, PT headings) **migrate on read/write**: Validate/Need→Todo; Description/Human dropped.
 
 | Section | Role |
 |---------|------|
 | **Thread** | Short stream label (required for `mn check`) |
-| **Description** | Long background; UI: secondary under thread |
 | **Now** | Current activity |
 | **Wait** | What is blocking — required when `blocked` |
-| **Validate** | Human checklist (todo in TUI) |
-| **Human** | Human-only notes |
+| **Todo** | Human verify/decide checklist |
 | **Closed** | Settled decisions |
 
 ## Commands
@@ -215,10 +221,10 @@ Legacy PT files (`## Fio`, `atualizado:`, `## Espera` / `## Bloqueio`, …) migr
 | `mn watch [n]` | full-screen refresh loop |
 | `mn init` | create file |
 | `mn thread "…"` | set thread (quiet) |
-| `mn description [--append] "…"` | set/append description |
 | `mn now "…"` | set now |
 | `mn wait "…"` | set what is blocking |
-| `mn validate "…"` | add checklist item |
+| `mn todo "…"` | add Todo checklist item |
+| `mn validate "…"` | alias → `todo` |
 | `mn status <id>` | set status from catalog |
 | `mn status --list` | list glyph · id · label · intent |
 | `mn status show` | active pack path + list |
@@ -226,10 +232,9 @@ Legacy PT files (`## Fio`, `atualizado:`, `## Espera` / `## Bloqueio`, …) migr
 | `mn status edit` | open user pack in `$EDITOR` |
 | `mn status help` | catalog + custom pack docs |
 | `mn status blocked -- "reason"` | blocked + Wait in one shot |
-| `mn human [--replace] "…"` | human note |
 | `mn close "…"` | closed decision |
-| `mn done [n\|text]` | mark validate done |
-| `mn clear-validate` | reset checklist |
+| `mn done [n\|text]` | mark todo done |
+| `mn clear-todo` | reset Todo checklist |
 | `mn check` | structure gate (exit 0/1; enforces Wait when blocked) |
 | `mn path` | print path |
 | `mn +` | interactive menu |

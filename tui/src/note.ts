@@ -1,8 +1,10 @@
 /**
- * MICRONOTE.md parse / serialize — English canonical schema.
- * Matches bin/mn file format (Thread, Description, Now, Wait, Validate, Human, Closed).
+ * MICRONOTE.md parse / serialize — SCHEMA v0.1
  *
- * Wait = what is blocking (required when status=blocked; cleared when unblocked).
+ * Canonical sections: Thread · Now · Wait · Todo · Closed
+ * (Human + Description dropped; Validate/Need renamed → Todo)
+ *
+ * Wait = what is blocking (required when status requiresWait; cleared when unblocked).
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -21,25 +23,34 @@ import {
 /** @deprecated free-form string; valid ids come from the status catalog (ai-dev pack). */
 export type NoteStatus = string;
 
-export interface ValidateItem {
+export interface TodoItem {
   text: string;
   done: boolean;
 }
+
+/** @deprecated use TodoItem */
+export type ValidateItem = TodoItem;
+/** @deprecated use TodoItem */
+export type NeedItem = TodoItem;
 
 export interface MicroNote {
   updated: string;
   status: NoteStatus | string;
   thread: string;
-  description: string;
   now: string;
   /** What is blocking — required when status requires wait (blocked). */
   wait: string;
-  validate: ValidateItem[];
-  human: string;
+  /** Human verify/decide checklist (SCHEMA: Todo). */
+  todo: TodoItem[];
   closed: string[];
 }
 
-export const PLACEHOLDER_VALIDATE = '(nothing yet)';
+export const PLACEHOLDER_TODO = '(nothing yet)';
+/** @deprecated use PLACEHOLDER_TODO */
+export const PLACEHOLDER_NEED = PLACEHOLDER_TODO;
+/** @deprecated use PLACEHOLDER_TODO */
+export const PLACEHOLDER_VALIDATE = PLACEHOLDER_TODO;
+
 /** Live catalog order (ai-dev by default). Prefer statusIds() for new code. */
 export const VALID_STATUSES: string[] = statusIds();
 
@@ -59,28 +70,40 @@ export function emptyNote(): MicroNote {
     updated: nowHm(),
     status: 'idle',
     thread: '',
-    description: '',
     now: '',
     wait: '',
-    validate: [],
-    human: '',
+    todo: [],
     closed: [],
   };
 }
 
-/** Map legacy PT headings/meta when reading old files. */
-function normalizeHeading(h: string): string {
-  const map: Record<string, string> = {
+/**
+ * Map legacy headings to canonical SCHEMA ids.
+ * Description / Human map to null (dropped — not written back).
+ */
+function normalizeHeading(h: string): string | null {
+  const map: Record<string, string | null> = {
+    Thread: 'Thread',
     Fio: 'Thread',
-    Descricao: 'Description',
+    Now: 'Now',
     Agora: 'Now',
+    Wait: 'Wait',
     Espera: 'Wait',
     Bloqueio: 'Wait',
-    Validar: 'Validate',
-    Humano: 'Human',
+    Todo: 'Todo',
+    Need: 'Todo',
+    Validate: 'Todo',
+    Validar: 'Todo',
+    Closed: 'Closed',
     Fechado: 'Closed',
+    // Dropped from SCHEMA v0.1 — parse then discard
+    Description: null,
+    Descricao: null,
+    Human: null,
+    Humano: null,
   };
-  return map[h] ?? h;
+  if (h in map) return map[h]!;
+  return h; // unknown: keep under that key but never serialize
 }
 
 export function parseNote(raw: string): MicroNote {
@@ -89,11 +112,9 @@ export function parseNote(raw: string): MicroNote {
   let section: string | null = null;
   const bodies: Record<string, string[]> = {
     Thread: [],
-    Description: [],
     Now: [],
     Wait: [],
-    Validate: [],
-    Human: [],
+    Todo: [],
     Closed: [],
   };
 
@@ -113,14 +134,16 @@ export function parseNote(raw: string): MicroNote {
 
     const hm = line.match(/^##\s+(.+)\s*$/);
     if (hm) {
-      section = normalizeHeading(hm[1].trim());
-      if (!(section in bodies)) bodies[section] = [];
+      const canon = normalizeHeading(hm[1].trim());
+      section = canon;
+      if (canon && !(canon in bodies)) bodies[canon] = [];
       continue;
     }
 
     if (section && section in bodies) {
       bodies[section].push(line);
     }
+    // Description / Human / unknown: ignored (not stored)
   }
 
   const trimBody = (xs: string[]) =>
@@ -131,25 +154,23 @@ export function parseNote(raw: string): MicroNote {
       .trim();
 
   note.thread = trimBody(bodies.Thread ?? []);
-  note.description = trimBody(bodies.Description ?? []);
   note.now = trimBody(bodies.Now ?? []);
   note.wait = trimBody(bodies.Wait ?? []);
-  note.human = trimBody(bodies.Human ?? []);
 
-  note.validate = [];
-  for (const line of bodies.Validate ?? []) {
+  note.todo = [];
+  for (const line of bodies.Todo ?? []) {
     const t = line.trim();
     if (!t) continue;
     const done = t.match(/^- \[[xX]\]\s+(.*)$/);
     const open = t.match(/^- \[ \]\s+(.*)$/);
     if (done) {
       const text = done[1].trim();
-      if (text === PLACEHOLDER_VALIDATE || text === '(nada ainda)') continue;
-      note.validate.push({ text, done: true });
+      if (text === PLACEHOLDER_TODO || text === '(nada ainda)') continue;
+      note.todo.push({ text, done: true });
     } else if (open) {
       const text = open[1].trim();
-      if (text === PLACEHOLDER_VALIDATE || text === '(nada ainda)') continue;
-      note.validate.push({ text, done: false });
+      if (text === PLACEHOLDER_TODO || text === '(nada ainda)') continue;
+      note.todo.push({ text, done: false });
     }
   }
 
@@ -166,10 +187,10 @@ export function parseNote(raw: string): MicroNote {
 }
 
 export function serializeNote(note: MicroNote): string {
-  const validateLines =
-    note.validate.length === 0
-      ? [`- [ ] ${PLACEHOLDER_VALIDATE}`]
-      : note.validate.map((v) => `- [${v.done ? 'x' : ' '}] ${v.text}`);
+  const todoLines =
+    note.todo.length === 0
+      ? [`- [ ] ${PLACEHOLDER_TODO}`]
+      : note.todo.map((v) => `- [${v.done ? 'x' : ' '}] ${v.text}`);
 
   const closedLines =
     note.closed.length === 0 ? ['- '] : note.closed.map((c) => `- ${c}`);
@@ -182,6 +203,7 @@ export function serializeNote(note: MicroNote): string {
   // When status does not require wait, do not persist a stale reason.
   const waitBody = statusRequiresWait(String(note.status || 'idle')) ? note.wait : '';
 
+  // SCHEMA v0.1 template: Thread · Now · Wait · Todo · Closed
   return [
     '# microNote',
     `updated: ${note.updated || nowHm()}`,
@@ -189,16 +211,12 @@ export function serializeNote(note: MicroNote): string {
     '',
     block('Thread', note.thread).trimEnd(),
     '',
-    block('Description', note.description).trimEnd(),
-    '',
     block('Now', note.now).trimEnd(),
     '',
     block('Wait', waitBody).trimEnd(),
     '',
-    `## Validate`,
-    ...validateLines,
-    '',
-    block('Human', note.human).trimEnd(),
+    `## Todo`,
+    ...todoLines,
     '',
     `## Closed`,
     ...closedLines,
@@ -216,7 +234,7 @@ export function withStatus(note: MicroNote, status: string): MicroNote {
   const next: MicroNote = {
     ...note,
     status,
-    validate: [...note.validate],
+    todo: [...note.todo],
     closed: [...note.closed],
   };
   if (!statusRequiresWait(status)) next.wait = '';
@@ -260,8 +278,13 @@ export function statusTitle(status: string): string {
   return catalogStatusTitle(status);
 }
 
-export function openValidateCount(note: MicroNote): number {
-  return note.validate.filter((v) => !v.done).length;
+export function openTodoCount(note: MicroNote): number {
+  return note.todo.filter((v) => !v.done).length;
 }
+
+/** @deprecated use openTodoCount */
+export const openNeedCount = openTodoCount;
+/** @deprecated use openTodoCount */
+export const openValidateCount = openTodoCount;
 
 export { statusIds, isValidStatus, canonicalizeStatus, statusRequiresWait };

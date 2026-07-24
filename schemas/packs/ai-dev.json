@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "pack": "ai-dev",
+  "label": "AI / multi-agent",
+  "description": "Design → plan → code → review stages for agent worktrees",
+  "order": [
+    "idle",
+    "designing",
+    "await-design",
+    "planning",
+    "review-plan",
+    "coding",
+    "review-code",
+    "blocked",
+    "ready"
+  ],
+  "aliases": {
+    "working": "coding"
+  },
+  "statuses": {
+    "idle": {
+      "intent": "ignore",
+      "glyph": "○",
+      "label": "idle"
+    },
+    "designing": {
+      "intent": "ignore",
+      "glyph": "◈",
+      "label": "designing"
+    },
+    "await-design": {
+      "intent": "act",
+      "glyph": "◇",
+      "label": "await design",
+      "badge": "approve design"
+    },
+    "planning": {
+      "intent": "ignore",
+      "glyph": "▤",
+      "label": "planning"
+    },
+    "review-plan": {
+      "intent": "act",
+      "glyph": "▣",
+      "label": "review plan",
+      "badge": "triage plan"
+    },
+    "coding": {
+      "intent": "ignore",
+      "glyph": "◉",
+      "label": "coding"
+    },
+    "review-code": {
+      "intent": "act",
+      "glyph": "◐",
+      "label": "review code",
+      "badge": "triage code"
+    },
+    "blocked": {
+      "intent": "act",
+      "glyph": "!",
+      "label": "blocked",
+      "badge": "needs you",
+      "requiresWait": true
+    },
+    "ready": {
+      "intent": "act",
+      "glyph": "►",
+      "label": "ready",
+      "badge": "validate"
+    }
+  }
+}

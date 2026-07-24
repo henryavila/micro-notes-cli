@@ -8,7 +8,12 @@ import { render, cleanup as inkCleanup } from 'ink-testing-library';
 import { readFileSync } from 'node:fs';
 import { App } from '../tui/src/App.js';
 import { parseNote } from '../tui/src/note.js';
+import { resetStatusCatalogCache } from '../tui/src/status-catalog.js';
 import { cleanup, makeTempDir, writeTempNote } from './helpers/tempNote.js';
+
+process.env.MN_PACK = 'ai-dev';
+process.env.MN_STATUSES_TEST_BUST = '1';
+resetStatusCatalogCache();
 
 async function waitFor(
   pred: () => boolean,
@@ -45,7 +50,7 @@ describe('TUI keys write the note file', () => {
       thread: 'before',
       now: 'now-before',
       status: 'idle',
-      validate: [
+      todo: [
         { text: 'alpha', done: false },
         { text: 'beta', done: false },
       ],
@@ -68,11 +73,11 @@ describe('TUI keys write the note file', () => {
       await typeKeys(stdin, [' ']);
       await waitFor(() => {
         const n = parseNote(readFileSync(path, 'utf8'));
-        return n.validate.some((v) => v.text === 'alpha' && v.done);
+        return n.todo.some((v) => v.text === 'alpha' && v.done);
       });
       const n = parseNote(readFileSync(path, 'utf8'));
-      expect(n.validate.find((v) => v.text === 'alpha')?.done).toBe(true);
-      expect(n.validate.find((v) => v.text === 'beta')?.done).toBe(false);
+      expect(n.todo.find((v) => v.text === 'alpha')?.done).toBe(true);
+      expect(n.todo.find((v) => v.text === 'beta')?.done).toBe(false);
     } finally {
       unmount();
     }
@@ -130,22 +135,22 @@ describe('TUI keys write the note file', () => {
     }
   });
 
-  it('v opens todo input and enter appends a validate item on disk', async () => {
+  it('v opens todo input and enter appends a todo item on disk', async () => {
     const { stdin, lastFrame, unmount } = render(<App />);
     try {
       await new Promise((r) => setTimeout(r, 60));
       await typeKeys(stdin, ['v'], 40);
-      // Dialog title is "todo" (user-facing); assert the input mode opened.
+      // Dialog title is "todo"; assert the input mode opened.
       await waitFor(() => /todo/i.test(lastFrame() ?? ''));
       await typeKeys(stdin, 'new-todo-item'.split(''), 20);
       await typeKeys(stdin, ['\r'], 40);
       await waitFor(() =>
-        parseNote(readFileSync(path, 'utf8')).validate.some((x) => x.text === 'new-todo-item'),
+        parseNote(readFileSync(path, 'utf8')).todo.some((x) => x.text === 'new-todo-item'),
       );
       const n = parseNote(readFileSync(path, 'utf8'));
-      expect(n.validate.map((x) => x.text)).toContain('new-todo-item');
+      expect(n.todo.map((x) => x.text)).toContain('new-todo-item');
       // Prior items preserved
-      expect(n.validate.map((x) => x.text)).toEqual(
+      expect(n.todo.map((x) => x.text)).toEqual(
         expect.arrayContaining(['alpha', 'beta', 'new-todo-item']),
       );
     } finally {
@@ -198,7 +203,7 @@ describe('TUI init when file is missing', () => {
       );
       const n = parseNote(readFileSync(missing, 'utf8'));
       expect(n.status).toBe('idle');
-      expect(n.validate).toEqual([]);
+      expect(n.todo).toEqual([]);
     } finally {
       unmount();
     }

@@ -9,40 +9,47 @@ import {
   statusTitle,
   blockedNeedsWait,
   withStatus,
-  openValidateCount,
-  PLACEHOLDER_VALIDATE,
+  openTodoCount,
+  PLACEHOLDER_TODO,
   notePath,
   readNoteFile,
   writeNoteFile,
   initNoteFile,
 } from '../tui/src/note.js';
+import { resetStatusCatalogCache } from '../tui/src/status-catalog.js';
 import { cleanup, makeTempDir, readRaw } from './helpers/tempNote.js';
 
-describe('parseNote', () => {
-  it('round-trips a filled note (EN schema)', () => {
+// Glyph / intent tests cover the ai-dev pack.
+process.env.MN_PACK = 'ai-dev';
+process.env.MN_STATUSES_TEST_BUST = '1';
+resetStatusCatalogCache();
+
+describe('parseNote / serializeNote (SCHEMA v0.1)', () => {
+  it('round-trips a filled note (Thread · Now · Wait · Todo · Closed)', () => {
     const n = emptyNote();
     n.thread = 'paddle webhooks';
-    n.description = 'line1\nline2';
     n.now = 'writing tests';
     n.status = 'ready';
-    n.validate = [
+    n.todo = [
       { text: 'npm test', done: false },
       { text: 'retry', done: true },
     ];
-    n.human = 'do not touch billing';
     n.closed = ['dropped Stripe'];
     const raw = serializeNote(n);
     const p = parseNote(raw);
     expect(p.thread).toBe('paddle webhooks');
-    expect(p.description).toContain('line1');
-    expect(p.description).toContain('line2');
     expect(p.now).toBe('writing tests');
     expect(p.status).toBe('ready');
-    expect(p.validate).toEqual(n.validate);
-    expect(p.human).toBe('do not touch billing');
+    expect(p.todo).toEqual(n.todo);
     expect(p.closed).toEqual(['dropped Stripe']);
     expect(raw).toContain('## Thread');
+    expect(raw).toContain('## Now');
     expect(raw).toContain('## Wait');
+    expect(raw).toContain('## Todo');
+    expect(raw).toContain('## Closed');
+    expect(raw).not.toContain('## Description');
+    expect(raw).not.toContain('## Human');
+    expect(raw).not.toContain('## Validate');
     expect(raw).toContain('- [ ] npm test');
     expect(raw).toContain('- [x] retry');
   });
@@ -58,7 +65,6 @@ describe('parseNote', () => {
     expect(parseNote(raw).wait).toBe('cutover now vs dual-write?');
 
     n.status = 'working';
-    // serialize drops wait body when not blocked
     const unblocked = serializeNote(n);
     expect(parseNote(unblocked).wait).toBe('');
     expect(unblocked).toMatch(/## Wait\n\n/);
@@ -81,15 +87,17 @@ describe('parseNote', () => {
     expect(blockedNeedsWait(entered)).toBe(true);
   });
 
-  it('drops EN and PT validate placeholders', () => {
-    expect(parseNote(serializeNote(emptyNote())).validate).toEqual([]);
-    const en = `# microNote\nupdated: 10:00\nstatus: idle\n\n## Thread\n\n## Description\n\n## Now\n\n## Wait\n\n## Validate\n- [ ] ${PLACEHOLDER_VALIDATE}\n\n## Human\n\n## Closed\n- \n`;
-    expect(parseNote(en).validate).toEqual([]);
+  it('drops EN/PT todo placeholders and maps legacy Validate/Need → Todo', () => {
+    expect(parseNote(serializeNote(emptyNote())).todo).toEqual([]);
+    const en = `# microNote\nupdated: 10:00\nstatus: idle\n\n## Thread\n\n## Now\n\n## Wait\n\n## Todo\n- [ ] ${PLACEHOLDER_TODO}\n\n## Closed\n- \n`;
+    expect(parseNote(en).todo).toEqual([]);
+    const legacyValidate = `# microNote\nupdated: 10:00\nstatus: idle\n\n## Validate\n- [ ] ${PLACEHOLDER_TODO}\n\n## Closed\n- \n`;
+    expect(parseNote(legacyValidate).todo).toEqual([]);
     const pt = `# microNote\natualizado: 10:00\nestado: idle\n\n## Validar\n- [ ] (nada ainda)\n\n## Fechado\n- \n`;
-    expect(parseNote(pt).validate).toEqual([]);
+    expect(parseNote(pt).todo).toEqual([]);
   });
 
-  it('keeps real items when mixed with a placeholder line', () => {
+  it('keeps real Todo items when mixed with a placeholder line', () => {
     const raw = `# microNote
 updated: 10:00
 status: idle
@@ -97,24 +105,20 @@ status: idle
 ## Thread
 t
 
-## Description
-
 ## Now
 
 ## Wait
 
-## Validate
-- [ ] ${PLACEHOLDER_VALIDATE}
+## Todo
+- [ ] ${PLACEHOLDER_TODO}
 - [ ] real item
 - [x] done item
-
-## Human
 
 ## Closed
 - 
 `;
     const p = parseNote(raw);
-    expect(p.validate).toEqual([
+    expect(p.todo).toEqual([
       { text: 'real item', done: false },
       { text: 'done item', done: true },
     ]);
@@ -128,14 +132,10 @@ status: working
 ## Thread
 t
 
-## Description
-
 ## Now
 
-## Validate
+## Todo
 - [X] CAPS
-
-## Human
 
 ## Closed
 -
@@ -144,11 +144,11 @@ second bare
 
 `;
     const p = parseNote(raw);
-    expect(p.validate).toEqual([{ text: 'CAPS', done: true }]);
+    expect(p.todo).toEqual([{ text: 'CAPS', done: true }]);
     expect(p.closed).toEqual(['first', 'second bare']);
   });
 
-  it('migrates legacy PT headings and keeps bodies', () => {
+  it('migrates legacy PT headings; drops Description/Human bodies', () => {
     const raw = `# microNote
 atualizado: 10:00
 estado: working
@@ -175,11 +175,15 @@ note
     expect(p.updated).toBe('10:00');
     expect(p.status).toBe('working');
     expect(p.thread).toBe('old thread');
-    expect(p.description).toBe('old desc');
     expect(p.now).toBe('old now');
-    expect(p.validate).toEqual([]);
-    expect(p.human).toBe('note');
+    expect(p.todo).toEqual([]);
     expect(p.closed).toEqual(['closed item']);
+    // Dropped sections must not reappear on write
+    const out = serializeNote(p);
+    expect(out).not.toContain('## Description');
+    expect(out).not.toContain('## Human');
+    expect(out).not.toContain('old desc');
+    expect(out).not.toContain('## Humano');
   });
 
   it('parses CRLF the same as LF', () => {
@@ -195,7 +199,7 @@ note
   });
 
   it('defaults empty status meta to idle; keeps unknown status strings', () => {
-    const emptyStatus = `# microNote\nupdated: 10:00\nstatus: \n\n## Thread\n\n## Description\n\n## Now\n\n## Validate\n- [ ] ${PLACEHOLDER_VALIDATE}\n\n## Human\n\n## Closed\n- \n`;
+    const emptyStatus = `# microNote\nupdated: 10:00\nstatus: \n\n## Thread\n\n## Now\n\n## Todo\n- [ ] ${PLACEHOLDER_TODO}\n\n## Closed\n- \n`;
     expect(parseNote(emptyStatus).status).toBe('idle');
     const weird = emptyStatus.replace('status: ', 'status: foobar');
     expect(parseNote(weird).status).toBe('foobar');
@@ -205,24 +209,15 @@ note
     expect(() => parseNote('# microNote\n')).not.toThrow();
     expect(parseNote('# microNote\n').thread).toBe('');
   });
-});
 
-describe('serializeNote', () => {
-  it('writes empty validate as the canonical placeholder (bash-compatible)', () => {
+  it('writes empty Todo as the canonical placeholder (bash-compatible)', () => {
     const raw = serializeNote(emptyNote());
-    expect(raw).toContain(`- [ ] ${PLACEHOLDER_VALIDATE}`);
+    expect(raw).toContain(`- [ ] ${PLACEHOLDER_TODO}`);
     expect(raw).toMatch(/^status: idle$/m);
     expect(raw).toContain('## Thread');
+    expect(raw).toContain('## Todo');
     expect(raw).toContain('## Closed');
-    // empty closed is a lone dash line — matches bin/mn template
     expect(raw).toMatch(/## Closed\n- \n/);
-  });
-
-  it('round-trips multi-line description', () => {
-    const n = emptyNote();
-    n.description = 'para one\n\npara two';
-    const again = parseNote(serializeNote(n));
-    expect(again.description).toBe('para one\n\npara two');
   });
 });
 
@@ -242,24 +237,25 @@ describe('notePath / IO', () => {
       const n = readNoteFile(path);
       expect(n).not.toBeNull();
       expect(n!.status).toBe('idle');
-      expect(n!.validate).toEqual([]);
-      expect(readRaw(path)).toContain(`- [ ] ${PLACEHOLDER_VALIDATE}`);
+      expect(n!.todo).toEqual([]);
+      expect(readRaw(path)).toContain(`- [ ] ${PLACEHOLDER_TODO}`);
+      expect(readRaw(path)).toContain('## Todo');
+      expect(readRaw(path)).not.toContain('## Description');
+      expect(readRaw(path)).not.toContain('## Human');
 
       writeNoteFile(path, {
         ...n!,
         thread: 'from-ts',
         now: 'io test',
         status: 'working',
-        validate: [{ text: 'a', done: false }],
+        todo: [{ text: 'a', done: false }],
         closed: [],
-        human: '',
-        description: '',
       });
       const again = readNoteFile(path)!;
       expect(again.thread).toBe('from-ts');
       expect(again.now).toBe('io test');
+      expect(again.todo).toEqual([{ text: 'a', done: false }]);
       expect(again.updated).toMatch(/^\d{2}:\d{2}$/);
-      // no leftover atomic temp files
       const leftovers = readdirSync(dir).filter((f) => f.startsWith('.micronote.'));
       expect(leftovers).toEqual([]);
     } finally {
@@ -269,22 +265,22 @@ describe('notePath / IO', () => {
 });
 
 describe('helpers', () => {
-  it('openValidateCount counts only open real items', () => {
+  it('openTodoCount counts only open real items', () => {
     const n = emptyNote();
-    expect(openValidateCount(n)).toBe(0);
-    n.validate = [
+    expect(openTodoCount(n)).toBe(0);
+    n.todo = [
       { text: 'a', done: false },
       { text: 'b', done: true },
       { text: 'c', done: false },
     ];
-    expect(openValidateCount(n)).toBe(2);
+    expect(openTodoCount(n)).toBe(2);
   });
 
   it('statusToIntent maps catalog statuses used by the TUI chrome', () => {
     expect(statusToIntent('ready')).toBe('ok');
     expect(statusToIntent('blocked')).toBe('error');
     expect(statusToIntent('coding')).toBe('drift');
-    expect(statusToIntent('working')).toBe('drift'); // alias → coding
+    expect(statusToIntent('working')).toBe('drift');
     expect(statusToIntent('idle')).toBe('pending');
     expect(statusToIntent('review-plan')).toBe('warn');
     expect(statusToIntent('review-code')).toBe('warn');
@@ -293,7 +289,7 @@ describe('helpers', () => {
   it('statusGlyph / statusTitle put a mark in the pane title (ai-dev pack)', () => {
     expect(statusGlyph('idle')).toBe('○');
     expect(statusGlyph('coding')).toBe('◉');
-    expect(statusGlyph('working')).toBe('◉'); // alias
+    expect(statusGlyph('working')).toBe('◉');
     expect(statusGlyph('blocked')).toBe('!');
     expect(statusGlyph('ready')).toBe('►');
     expect(statusGlyph('review-plan')).toBe('▣');

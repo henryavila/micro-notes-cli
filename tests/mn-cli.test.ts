@@ -1,6 +1,7 @@
 /**
  * Integration: real `bin/mn` process. Asserts exit codes, stdout, and on-disk format.
  * Complements tests/run.sh — runs under vitest so `npm test` is one gate.
+ * SCHEMA v0.1: Thread · Now · Wait · Todo · Closed
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -35,7 +36,7 @@ describe('mn CLI (real process)', () => {
     expect(r.status).not.toBe(0);
   });
 
-  it('init creates EN schema; second init does not clobber', () => {
+  it('init creates SCHEMA v0.1 headings; second init does not clobber', () => {
     const a = runMn(['init'], env());
     expect(a.status).toBe(0);
     expect(existsSync(MN_FILE)).toBe(true);
@@ -43,7 +44,13 @@ describe('mn CLI (real process)', () => {
     expect(raw).toMatch(/^updated:/m);
     expect(raw).toMatch(/^status:/m);
     expect(raw).toContain('## Thread');
-    expect(raw).toContain('## Description');
+    expect(raw).toContain('## Now');
+    expect(raw).toContain('## Wait');
+    expect(raw).toContain('## Todo');
+    expect(raw).toContain('## Closed');
+    expect(raw).not.toContain('## Description');
+    expect(raw).not.toContain('## Human');
+    expect(raw).not.toContain('## Validate');
     expect(raw).toContain('(nothing yet)');
     const hash = createHash('sha256').update(raw).digest('hex');
 
@@ -76,15 +83,12 @@ describe('mn CLI (real process)', () => {
       expect(r.status, s).toBe(0);
       expect(readFileSync(MN_FILE, 'utf8')).toMatch(new RegExp(`^status: ${s}$`, 'm'));
     }
-    // legacy alias working → coding
     expect(runMn(['status', 'working'], env()).status).toBe(0);
     expect(readFileSync(MN_FILE, 'utf8')).toMatch(/^status: coding$/m);
-    // blocked requires an explicit reason
     const blocked = runMn(['status', 'blocked', '--', 'need decision'], env());
     expect(blocked.status).toBe(0);
     expect(readFileSync(MN_FILE, 'utf8')).toMatch(/^status: blocked$/m);
     expect(readFileSync(MN_FILE, 'utf8')).toContain('need decision');
-    // status --list shows pack
     const list = runMn(['status', '--list'], env());
     expect(list.status).toBe(0);
     expect(list.stdout).toMatch(/review-plan/);
@@ -96,26 +100,24 @@ describe('mn CLI (real process)', () => {
     expect(runMn(['check'], env()).status).not.toBe(0);
 
     runMn(['thread', 't'], env());
-    runMn(['description', 'd'], env());
     runMn(['now', 'n'], env());
-    runMn(['validate', 'v1'], env());
+    runMn(['todo', 'v1'], env());
     runMn(['status', 'ready'], env());
     const ok = runMn(['check'], env());
     expect(ok.status).toBe(0);
     expect(ok.stdout).toMatch(/ok/i);
   });
 
-  it('ready + only placeholder does NOT show "1 to validate"', () => {
+  it('ready + only placeholder does NOT show open-todo badge', () => {
     runMn(['init'], env());
     runMn(['thread', 't'], env());
     runMn(['status', 'ready'], env());
     const show = runMn(['show'], env());
     expect(show.status).toBe(0);
-    expect(show.stdout).not.toMatch(/1 to validate/);
-    // with a real open item, badge appears
-    runMn(['validate', 'npm test'], env());
+    expect(show.stdout).not.toMatch(/1 open todo|1 to validate/);
+    runMn(['todo', 'npm test'], env());
     const show2 = runMn(['show'], env());
-    expect(show2.stdout).toMatch(/1 to validate|to validate/);
+    expect(show2.stdout).toMatch(/1 open todo|open todo|to validate/);
   });
 
   it('blocked without reason fails; with reason shows needs you + text', () => {
@@ -129,38 +131,31 @@ describe('mn CLI (real process)', () => {
     expect(show.stdout).toMatch(/needs you/);
     expect(show.stdout).toMatch(/cutover vs dual-write/);
     expect(show.stdout).toMatch(/blocked on/i);
-    // leaving blocked clears Wait
     expect(runMn(['status', 'coding'], env()).status).toBe(0);
     const body = readFileSync(MN_FILE, 'utf8');
     expect(body).toMatch(/status: coding/);
     expect(body).not.toMatch(/cutover vs dual-write/);
   });
 
-  it('done marks first open; clear-validate restores placeholder', () => {
+  it('done marks first open; clear-todo restores placeholder', () => {
     runMn(['init'], env());
     runMn(['thread', 't'], env());
-    runMn(['validate', 'npm test'], env());
-    runMn(['validate', 'retry'], env());
+    runMn(['todo', 'npm test'], env());
+    runMn(['todo', 'retry'], env());
     expect(runMn(['done'], env()).status).toBe(0);
     expect(readFileSync(MN_FILE, 'utf8')).toMatch(/- \[x\] npm test/);
-    expect(runMn(['clear-validate'], env()).status).toBe(0);
+    expect(runMn(['clear-todo'], env()).status).toBe(0);
     expect(readFileSync(MN_FILE, 'utf8')).toContain('(nothing yet)');
   });
 
-  it('description --append and human --replace mutate sections as claimed', () => {
+  it('mn todo appends checklist items; validate is an alias', () => {
     runMn(['init'], env());
     runMn(['thread', 't'], env());
-    runMn(['description', 'first'], env());
-    runMn(['description', '--append', 'second'], env());
-    let body = readFileSync(MN_FILE, 'utf8');
-    expect(body).toContain('first');
-    expect(body).toContain('second');
-
-    runMn(['human', 'old note'], env());
-    runMn(['human', '--replace', 'only this'], env());
-    body = readFileSync(MN_FILE, 'utf8');
-    expect(body).toContain('only this');
-    expect(body).not.toContain('old note');
+    runMn(['todo', 'first'], env());
+    runMn(['validate', 'second'], env()); // alias
+    const note = parseNote(readFileSync(MN_FILE, 'utf8'));
+    expect(note.todo.map((x) => x.text)).toEqual(['first', 'second']);
+    expect(readFileSync(MN_FILE, 'utf8')).toContain('## Todo');
   });
 
   it('unknown command exits 2; path prints MN_FILE; version is non-empty', () => {
@@ -183,16 +178,14 @@ describe('mn CLI (real process)', () => {
     runMn(['init'], env());
     runMn(['thread', 'cross-stack'], env());
     runMn(['now', 'parity'], env());
-    runMn(['validate', 'item-a'], env());
+    runMn(['todo', 'item-a'], env());
     runMn(['status', 'working'], env());
-    runMn(['human', 'note'], env());
     runMn(['close', 'decision'], env());
     const note = parseNote(readFileSync(MN_FILE, 'utf8'));
     expect(note.thread).toBe('cross-stack');
     expect(note.now).toBe('parity');
-    expect(note.status).toBe('coding'); // working alias is written as coding
-    expect(note.validate).toEqual([{ text: 'item-a', done: false }]);
-    expect(note.human).toBe('note');
+    expect(note.status).toBe('coding');
+    expect(note.todo).toEqual([{ text: 'item-a', done: false }]);
     expect(note.closed).toEqual(['decision']);
   });
 
@@ -200,10 +193,9 @@ describe('mn CLI (real process)', () => {
     const { writeNoteFile, emptyNote } = await import('../tui/src/note.js');
     const n = emptyNote();
     n.thread = 'from-typescript';
-    n.description = 'desc';
     n.now = 'now';
     n.status = 'ready';
-    n.validate = [{ text: 'ship it', done: false }];
+    n.todo = [{ text: 'ship it', done: false }];
     writeNoteFile(MN_FILE, n);
 
     const check = runMn(['check'], env());
@@ -211,9 +203,10 @@ describe('mn CLI (real process)', () => {
     const show = runMn(['show'], env());
     expect(show.stdout).toContain('from-typescript');
     expect(show.stdout).toContain('ship it');
+    expect(show.stdout).toMatch(/\btodo\b/i);
   });
 
-  it('migrates legacy PT file on show (on-disk EN headings)', () => {
+  it('migrates legacy PT file on show (on-disk EN SCHEMA v0.1 headings)', () => {
     const legacy = `${dir}/legacy.md`;
     writeFileSync(
       legacy,
@@ -231,6 +224,7 @@ old now
 - [ ] (nada ainda)
 
 ## Humano
+old human note
 
 ## Fechado
 - 
@@ -243,6 +237,10 @@ old now
     expect(body).toMatch(/^updated:/m);
     expect(body).toMatch(/^status:/m);
     expect(body).toContain('## Thread');
+    expect(body).toContain('## Todo');
     expect(body).toContain('old thread');
+    expect(body).not.toContain('## Human');
+    expect(body).not.toContain('## Humano');
+    expect(body).not.toContain('## Description');
   });
 });
