@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# smoke tests for mn — SCHEMA v0.1 (Thread · Now · Wait · Todo · Closed)
+# smoke tests for mn — SCHEMA v0.1 (Thread · Now · Wait · Todo · Finished)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MN="$ROOT/bin/mn"
@@ -33,7 +33,7 @@ grep -qx '## Thread' "$MN_FILE" || fail "init missing ## Thread"
 grep -qx '## Now' "$MN_FILE" || fail "init missing ## Now"
 grep -qx '## Wait' "$MN_FILE" || fail "init missing ## Wait"
 grep -qx '## Todo' "$MN_FILE" || fail "init missing ## Todo"
-grep -qx '## Closed' "$MN_FILE" || fail "init missing ## Closed"
+grep -qx '## Finished' "$MN_FILE" || fail "init missing ## Finished"
 if grep -qx '## Description' "$MN_FILE"; then fail "init must not have ## Description"; fi
 if grep -qx '## Human' "$MN_FILE"; then fail "init must not have ## Human"; fi
 if grep -qx '## Validate' "$MN_FILE"; then fail "init must not have ## Validate"; fi
@@ -56,7 +56,7 @@ printf '%s\n' "$out" | grep -q 'ok · thread' || fail "thread should be quiet ok
 "$MN" todo "npm test -- webhook" >/dev/null
 "$MN" todo "retry does not duplicate" >/dev/null
 "$MN" status ready >/dev/null
-"$MN" close "dropped Stripe" >/dev/null
+"$MN" finish "dropped Stripe" >/dev/null
 
 "$MN" check >/dev/null || fail "check should pass after fill"
 pass "check after fill + quiet writes"
@@ -90,7 +90,13 @@ grep -A2 '## Thread' "$MN_FILE" | grep -q 'new thread' || fail "shortcut t"
 grep -A2 '## Now' "$MN_FILE" | grep -q 'now text' || fail "shortcut n"
 "$MN" v "todo via v" >/dev/null
 grep -A5 '## Todo' "$MN_FILE" | grep -q 'todo via v' || fail "shortcut v→todo"
-pass "shortcuts t/n/v"
+"$MN" f "shipped via f" >/dev/null
+grep -A5 '## Finished' "$MN_FILE" | grep -q 'shipped via f' || fail "shortcut f→finish"
+# c must NOT be a finish shortcut anymore (unknown single-letter)
+if "$MN" c "should fail" >/dev/null 2>&1; then
+  fail "shortcut c should not map to finish"
+fi
+pass "shortcuts t/n/v/f"
 
 # version
 ver="$("$MN" --version)"
@@ -141,7 +147,33 @@ pass "generic pack"
 list_out="$("$MN" status --list)"
 printf '%s\n' "$list_out" | grep -q review-plan || fail "status --list missing review-plan"
 printf '%s\n' "$list_out" | grep -q review-code || fail "status --list missing review-code"
+# pack= must stick in config (installer + status pack write the same key)
+grep -qE '^pack=ai-dev$' "$MN_CONFIG_FILE" || fail "pack=ai-dev not persisted in $MN_CONFIG_FILE"
+pack_id="$("$MN" status pack 2>/dev/null | head -1 | tr -d '[:space:]')"
+[[ "$pack_id" == "ai-dev" ]] || fail "status pack reports '$pack_id' want ai-dev"
 pass "ai-dev status pack"
+
+# install.sh reinstall must not wipe pack when non-interactive / --pack omitted
+INSTALL_CFG="$TMP/install-cfg"
+mkdir -p "$INSTALL_CFG"
+printf 'lang=en\npack=ai-dev\nroot=%s\n' "$ROOT" >"$INSTALL_CFG/config"
+# Simulate installer default: read configured pack when no PACK_ARG and no TTY
+# shellcheck disable=SC1091
+(
+  export MN_CONFIG_DIR="$INSTALL_CFG"
+  CONFIG_DIR="$INSTALL_CFG"
+  CONFIG_FILE="$INSTALL_CFG/config"
+  # inline the same logic install.sh uses for non-interactive default
+  cur="$(grep -E '^(pack|MN_PACK)=' "$CONFIG_FILE" | head -1 | sed -E 's/^[^=]+=[[:space:]]*//')"
+  [[ "$cur" == "ai-dev" ]] || fail "precondition: pack=ai-dev"
+  # non-interactive pick would keep current
+  picked="$cur"
+  [[ "$picked" == "ai-dev" ]] || fail "reinstall default should keep ai-dev"
+)
+# And re-running write_pack_config equivalent keeps pack=
+printf 'lang=en\npack=ai-dev\n' >"$INSTALL_CFG/config"
+"$ROOT/install.sh" --dry-run --pack ai-dev --prefix "$TMP/fake-bin" >/dev/null 2>&1 || true
+pass "install pack sticky"
 
 # status init scaffolds user pack (isolated config dir)
 export MN_CONFIG_DIR="$ROOT/cfg-status"

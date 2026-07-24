@@ -133,40 +133,87 @@ write_lang_config() {
   mv -f "$tmp" "$CONFIG_FILE"
 }
 
+# Read pack= from existing config (empty if unset / unknown).
+read_configured_pack() {
+  [[ -f "$CONFIG_FILE" ]] || return 0
+  local line key val
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="$(printf '%s' "$key" | tr -d '[:space:]')"
+    val="$(printf '%s' "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    if [[ "$key" == "pack" || "$key" == "MN_PACK" ]]; then
+      case "$val" in
+        generic|ai-dev) printf '%s\n' "$val"; return 0 ;;
+      esac
+    fi
+  done <"$CONFIG_FILE"
+}
+
 # Interactive status-pack picker. Prompts on stderr; pack id on stdout.
+# Reinstalls: keep the previously configured pack as the default choice so
+# selecting "2" once sticks across install.sh runs (no need to re-pick).
 pick_status_pack() {
+  local current=""
+  current="$(read_configured_pack || true)"
+  current="$(printf '%s' "$current" | tr -d '\r\n')"
+
   if [[ -n "$PACK_ARG" ]]; then
     case "$PACK_ARG" in
       generic|ai-dev) printf '%s\n' "$PACK_ARG"; return 0 ;;
       *)
-        warn "unknown pack '$PACK_ARG' — using generic"
-        printf 'generic\n'
+        warn "unknown pack '$PACK_ARG' — using ${current:-generic}"
+        printf '%s\n' "${current:-generic}"
         return 0
         ;;
     esac
   fi
+  # Non-interactive: never reset a saved pack to generic.
   if [[ ! -t 0 ]] || [[ ! -r /dev/tty ]]; then
-    printf 'generic\n'
+    printf '%s\n' "${current:-generic}"
     return 0
   fi
+
+  local def_num=1 def_id="generic"
+  if [[ "$current" == "ai-dev" ]]; then
+    def_num=2
+    def_id="ai-dev"
+  fi
+
   {
     printf '\n'
     printf '  Status pack (which statuses appear in mn / TUI)\n'
+    printf '  Saved in %s  (survives reinstall)\n' "$CONFIG_FILE"
     printf '\n'
-    printf '    1) generic   — idle · working · blocked · ready  (default)\n'
-    printf '    2) ai-dev    — design → plan → code → review stages\n'
+    if [[ "$def_id" == "generic" ]]; then
+      printf '    1) generic   — idle · working · blocked · ready  (default)\n'
+      printf '    2) ai-dev    — design → plan → code → review stages\n'
+    else
+      printf '    1) generic   — idle · working · blocked · ready\n'
+      printf '    2) ai-dev    — design → plan → code → review stages  (default · current)\n'
+    fi
     printf '\n'
     printf '  You can change later: mn status pack list | mn status pack <id>\n'
     printf '  Personal overlay:     mn status init  (edit statuses.json)\n'
     printf '\n'
-    printf '  choice [1]: '
+    printf '  choice [%s]: ' "$def_num"
   } >&2
   local ans=""
   # shellcheck disable=SC2162
   read -r ans </dev/tty || true
-  case "${ans:-1}" in
+  # Empty answer → keep previous / product default (not always "1").
+  if [[ -z "${ans//[[:space:]]/}" ]]; then
+    printf '%s\n' "$def_id"
+    return 0
+  fi
+  case "$ans" in
     2|ai-dev|ai|dev) printf 'ai-dev\n' ;;
-    *) printf 'generic\n' ;;
+    1|generic|g) printf 'generic\n' ;;
+    *)
+      warn "unknown choice '$ans' — keeping $def_id"
+      printf '%s\n' "$def_id"
+      ;;
   esac
 }
 
@@ -186,7 +233,8 @@ write_pack_config() {
   tmp="$(mktemp)"
   if [[ -f "$CONFIG_FILE" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
-      if [[ "$line" == pack=* ]]; then
+      # rewrite pack= / MN_PACK= (with optional spaces)
+      if [[ "$line" =~ ^(pack|MN_PACK)[[:space:]]*= ]]; then
         if [[ $wrote -eq 0 ]]; then
           printf 'pack=%s\n' "$pack"
           wrote=1
@@ -214,6 +262,28 @@ install_locales() {
   fi
   mkdir -p "$dest"
   cp -f "$LOCALES_SRC/en.sh" "$dest/" 2>/dev/null || true
+}
+
+# Copy pack JSON + catalog script so copy-install (not only --link) can resolve packs.
+install_share_assets() {
+  local packs_src="$ROOT/schemas/packs"
+  local script_src="$ROOT/scripts/status-catalog.mjs"
+  info "installing pack assets → $SHARE_DIR"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    log "[dry-run] mkdir -p $SHARE_DIR/schemas/packs $SHARE_DIR/scripts"
+    log "[dry-run] cp schemas/packs/*.json + status-catalog.mjs"
+    return 0
+  fi
+  mkdir -p "$SHARE_DIR/schemas/packs" "$SHARE_DIR/scripts"
+  if [[ -d "$packs_src" ]]; then
+    cp -f "$packs_src"/*.json "$SHARE_DIR/schemas/packs/" 2>/dev/null || true
+  fi
+  if [[ -f "$ROOT/schemas/statuses.default.json" ]]; then
+    cp -f "$ROOT/schemas/statuses.default.json" "$SHARE_DIR/schemas/" 2>/dev/null || true
+  fi
+  if [[ -f "$script_src" ]]; then
+    cp -f "$script_src" "$SHARE_DIR/scripts/status-catalog.mjs"
+  fi
 }
 
 # ── args ────────────────────────────────────────────────────────────
@@ -474,6 +544,7 @@ else
   info "root: $ROOT → $CONFIG_FILE"
 fi
 install_locales
+install_share_assets
 
 if [[ "$MODE" != "alias-only" ]]; then
   run "mkdir -p \"$PREFIX\""
@@ -602,10 +673,15 @@ fi
 
 cat <<EOF
 
-✓ install complete  (lang=$SELECTED_LANG)
+✓ install complete  (lang=$SELECTED_LANG · pack=$SELECTED_PACK)
+
+  Config: $CONFIG_FILE
+  pack=$SELECTED_PACK is the default until you change it
+  (reinstall keeps this choice unless you pick another pack).
 
   Try now:
     hash -r 2>/dev/null; mn --version
+    mn status pack list
     mn help
     mn show           # one-shot card
     mn ui             # blink TUI (needs npm install in repo)
@@ -619,5 +695,5 @@ cat <<EOF
     $ROOT/install.sh --uninstall
 
   Dev (live updates from repo):
-    $ROOT/install.sh --link --lang $SELECTED_LANG
+    $ROOT/install.sh --link --lang $SELECTED_LANG --pack $SELECTED_PACK
 EOF

@@ -119,28 +119,28 @@ describe('TUI App loads MN_FILE content', () => {
     }
   });
 
-  it('long user fields (thread/now/wait/todo/closed) wrap fully — no ellipsis cut-off', () => {
+  it('long user fields (thread/now/wait/todo/finished) wrap fully — no ellipsis cut-off', () => {
     const long = (tag: string) =>
       `${tag}_HEAD_${'x'.repeat(90)}_${tag}_TAIL_unique`;
     const thread = long('THREAD');
     const now = long('NOW');
     const wait = long('WAIT');
     const todoItem = long('TODO');
-    const closed = long('CLOSED');
+    const finished = long('FINISHED');
     const { path } = writeTempNote(dir, {
       thread,
       now,
       wait,
       status: 'blocked',
       todo: [{ text: todoItem, done: false }],
-      closed: [closed],
+      finished: [finished],
     });
     process.env.MN_FILE = path;
 
     const { lastFrame, unmount } = render(<App />);
     try {
       const frame = lastFrame() ?? '';
-      for (const tag of ['THREAD', 'NOW', 'WAIT', 'TODO', 'CLOSED']) {
+      for (const tag of ['THREAD', 'NOW', 'WAIT', 'TODO', 'FINISHED']) {
         expect(frame).toContain(`${tag}_HEAD_`);
         expect(frame).toContain(`${tag}_TAIL_unique`);
         expect(frame).not.toMatch(new RegExp(`${tag}_HEAD_[^\\n]*…`));

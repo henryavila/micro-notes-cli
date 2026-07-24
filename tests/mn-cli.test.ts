@@ -1,7 +1,7 @@
 /**
  * Integration: real `bin/mn` process. Asserts exit codes, stdout, and on-disk format.
  * Complements tests/run.sh — runs under vitest so `npm test` is one gate.
- * SCHEMA v0.1: Thread · Now · Wait · Todo · Closed
+ * SCHEMA v0.1: Thread · Now · Wait · Todo · Finished
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -47,7 +47,7 @@ describe('mn CLI (real process)', () => {
     expect(raw).toContain('## Now');
     expect(raw).toContain('## Wait');
     expect(raw).toContain('## Todo');
-    expect(raw).toContain('## Closed');
+    expect(raw).toContain('## Finished');
     expect(raw).not.toContain('## Description');
     expect(raw).not.toContain('## Human');
     expect(raw).not.toContain('## Validate');
@@ -180,13 +180,19 @@ describe('mn CLI (real process)', () => {
     runMn(['now', 'parity'], env());
     runMn(['todo', 'item-a'], env());
     runMn(['status', 'working'], env());
-    runMn(['close', 'decision'], env());
+    runMn(['finish', 'decision'], env());
     const note = parseNote(readFileSync(MN_FILE, 'utf8'));
     expect(note.thread).toBe('cross-stack');
     expect(note.now).toBe('parity');
     expect(note.status).toBe('coding');
     expect(note.todo).toEqual([{ text: 'item-a', done: false }]);
-    expect(note.closed).toEqual(['decision']);
+    expect(note.finished).toEqual(['decision']);
+    // close remains an alias for finish
+    runMn(['close', 'legacy-alias'], env());
+    expect(parseNote(readFileSync(MN_FILE, 'utf8')).finished).toEqual([
+      'decision',
+      'legacy-alias',
+    ]);
   });
 
   it('cross-stack: TS writeNoteFile is accepted by mn check/show', async () => {
@@ -238,9 +244,12 @@ old human note
     expect(body).toMatch(/^status:/m);
     expect(body).toContain('## Thread');
     expect(body).toContain('## Todo');
+    expect(body).toContain('## Finished');
     expect(body).toContain('old thread');
     expect(body).not.toContain('## Human');
     expect(body).not.toContain('## Humano');
     expect(body).not.toContain('## Description');
+    expect(body).not.toContain('## Closed');
+    expect(body).not.toContain('## Fechado');
   });
 });

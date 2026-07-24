@@ -14,7 +14,7 @@ export function writeTempNote(
 ): { path: string; note: MicroNote } {
   const note: MicroNote = { ...emptyNote(), ...partial };
   if (partial.todo) note.todo = partial.todo.map((v) => ({ ...v }));
-  if (partial.closed) note.closed = [...partial.closed];
+  if (partial.finished) note.finished = [...partial.finished];
   const path = join(dir, name);
   writeFileSync(path, serializeNote(note), 'utf8');
   return { path, note };

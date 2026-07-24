@@ -14,5 +14,5 @@ status: idle
 ## Todo
 - [ ] (nothing yet)
 
-## Closed
+## Finished
 - 

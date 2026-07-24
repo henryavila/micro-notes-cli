@@ -161,16 +161,20 @@ When status **requires wait** (`blocked`):
 | `w` | blocked on (`## Wait` — required when blocked) |
 | `v` | add todo item |
 | `s` | status picker (full catalog) |
-| `c` | close decision |
+| `f` | finished (settled decision) |
 | `j` / `k` or arrows | move todo focus |
 | `space` / `x` | toggle todo item |
+| `d` / backspace | remove focused todo item |
+| `c` | clear menu — done todos / all todos / now+wait / everything |
 | `r` | reload file |
 | `i` | init file if missing |
 | `?` | help |
 | `q` | quit |
 
-Footer chips (priority order; drops from the right on narrow terminals):  
-`t` `n` `w`* `v` `s` `sp` `c` `?` `q` — \*`w` only while blocked.
+**Clear menu (`c`):** pick what to wipe. *done todos* removes only checked items; *all todos* = `mn clear-todo`; *now + wait* clears activity; *everything* resets Now/Wait/Todo/Finished + status→idle but **keeps Thread** (confirm with Enter).
+
+Footer chips (priority order): one bar when they fit; **second bar on narrow terminals** before any chip is dropped. Only if both bars overflow do chips drop from the right:  
+`t` `n` `w`* `v` `s` `sp` `d` `f` `c` `?` `q` — \*`w` only while blocked.
 
 **Removed from SCHEMA v0.1:** `h`/Human, `d`/Description (and `## Validate` / `## Need` → `## Todo`).
 
@@ -197,11 +201,11 @@ what is blocking (required when status=blocked; cleared when unblocked)
 ## Todo
 - [ ] (nothing yet)
 
-## Closed
+## Finished
 -
 ```
 
-Legacy files (`## Validate`, `## Description`, `## Human`, PT headings) **migrate on read/write**: Validate/Need→Todo; Description/Human dropped.
+Legacy files (`## Validate`, `## Description`, `## Human`, `## Closed`, PT headings) **migrate on read/write**: Validate/Need→Todo; Closed→Finished; Description/Human dropped.
 
 | Section | Role |
 |---------|------|
@@ -209,7 +213,7 @@ Legacy files (`## Validate`, `## Description`, `## Human`, PT headings) **migrat
 | **Now** | Current activity |
 | **Wait** | What is blocking — required when `blocked` |
 | **Todo** | Human verify/decide checklist |
-| **Closed** | Settled decisions |
+| **Finished** | Settled decisions |
 
 ## Commands
 
@@ -232,7 +236,7 @@ Legacy files (`## Validate`, `## Description`, `## Human`, PT headings) **migrat
 | `mn status edit` | open user pack in `$EDITOR` |
 | `mn status help` | catalog + custom pack docs |
 | `mn status blocked -- "reason"` | blocked + Wait in one shot |
-| `mn close "…"` | closed decision |
+| `mn finish "…"` | settled decision (alias: `close`) |
 | `mn done [n\|text]` | mark todo done |
 | `mn clear-todo` | reset Todo checklist |
 | `mn check` | structure gate (exit 0/1; enforces Wait when blocked) |
@@ -241,7 +245,7 @@ Legacy files (`## Validate`, `## Description`, `## Human`, PT headings) **migrat
 | `mn help` | help |
 | `mn touch` | stamp `updated:` only |
 
-**CLI shortcuts:** `t` `d` `n` `w` `v` `s` `h` `c`
+**CLI shortcuts:** `t` `n` `w` `v` `s` `f`
 
 ## Env
 

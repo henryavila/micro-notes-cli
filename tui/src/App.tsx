@@ -21,11 +21,16 @@ import {
 import {
   type MicroNote,
   blockedNeedsWait,
+  clearActivity,
+  clearAllTodos,
+  clearDoneTodos,
+  clearSoft,
   emptyNote,
   initNoteFile,
   notePath,
   openTodoCount,
   readNoteFile,
+  removeTodo,
   statusIds,
   statusRequiresWait,
   statusToIntent,
@@ -46,17 +51,28 @@ type Mode =
   | { kind: 'input'; field: InputField; draft: string; cursor: number }
   | { kind: 'status'; focus: number }
   | { kind: 'settings'; focus: number }
+  | { kind: 'clear'; focus: number }
+  | { kind: 'clear-confirm' }
   | { kind: 'help' };
 
-// SCHEMA v0.1 surface: Thread · Now · Wait · Todo · Closed
+/** Clear menu options (id used as ChoicePicker id). */
+const CLEAR_OPTIONS: Array<{ id: string; label: string; hint: string }> = [
+  { id: 'done', label: 'done todos', hint: 'remove checked items only' },
+  { id: 'todos', label: 'all todos', hint: 'reset checklist (mn clear-todo)' },
+  { id: 'activity', label: 'now + wait', hint: 'clear activity / block reason' },
+  { id: 'everything', label: 'everything', hint: 'keep thread · reset rest' },
+  { id: 'cancel', label: 'cancel', hint: 'go back' },
+];
+
+// SCHEMA v0.1 surface: Thread · Now · Wait · Todo · Finished
 // (no Human / Description — see SCHEMA-v0.1.md)
-type InputField = 'thread' | 'now' | 'wait' | 'close' | 'todo';
+type InputField = 'thread' | 'now' | 'wait' | 'finished' | 'todo';
 
 const FIELD_TITLE: Record<InputField, string> = {
   thread: 'thread',
   now: 'now',
   wait: 'blocked on',
-  close: 'close',
+  finished: 'finished',
   todo: 'todo',
 };
 
@@ -360,7 +376,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   }, [path, reload]);
 
   const save = useCallback(
-    (next: MicroNote) => {
+    (next: MicroNote, flashMsg = 'saved') => {
       writing.current = true;
       try {
         writeNoteFile(path, next);
@@ -371,7 +387,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
           setFocusTodo((i) => Math.min(i, Math.max(0, n.todo.length - 1)));
         }
         setMissing(false);
-        setFlash('saved');
+        setFlash(flashMsg);
         setTimeout(() => setFlash(null), 900);
       } finally {
         setTimeout(() => {
@@ -380,6 +396,33 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       }
     },
     [path],
+  );
+
+  const applyClear = useCallback(
+    (id: string) => {
+      switch (id) {
+        case 'done':
+          save(clearDoneTodos(note), 'cleared done');
+          setMode({ kind: 'main' });
+          break;
+        case 'todos':
+          save(clearAllTodos(note), 'cleared todos');
+          setMode({ kind: 'main' });
+          break;
+        case 'activity':
+          save(clearActivity(note), 'cleared now/wait');
+          setMode({ kind: 'main' });
+          break;
+        case 'everything':
+          setMode({ kind: 'clear-confirm' });
+          break;
+        case 'cancel':
+        default:
+          setMode({ kind: 'main' });
+          break;
+      }
+    },
+    [note, save],
   );
 
   const focusTodoIdx = Math.min(
@@ -401,7 +444,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   const activePackId = useMemo(() => getConfiguredPackId(), [packEpoch]);
 
   const applyInput = (field: InputField, value: string) => {
-    const next: MicroNote = { ...note, todo: [...note.todo], closed: [...note.closed] };
+    const next: MicroNote = { ...note, todo: [...note.todo], finished: [...note.finished] };
     switch (field) {
       case 'thread':
         next.thread = value.trim();
@@ -420,8 +463,8 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         next.wait = w;
         break;
       }
-      case 'close':
-        if (value.trim()) next.closed = [...note.closed, value.trim()];
+      case 'finished':
+        if (value.trim()) next.finished = [...note.finished, value.trim()];
         break;
       case 'todo':
         if (value.trim()) next.todo = [...note.todo, { text: value.trim(), done: false }];
@@ -438,6 +481,40 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   useInput((input, key) => {
     if (mode.kind === 'help') {
       if (key.escape || input === 'q' || input === '?') setMode({ kind: 'main' });
+      return;
+    }
+
+    if (mode.kind === 'clear-confirm') {
+      if (key.escape || input === 'q' || input === 'n') {
+        setMode({ kind: 'clear', focus: 3 });
+        return;
+      }
+      if (key.return || input === 'y') {
+        save(clearSoft(note), 'cleared all');
+        setMode({ kind: 'main' });
+      }
+      return;
+    }
+
+    if (mode.kind === 'clear') {
+      if (key.escape || input === 'q' || input === 'c') {
+        setMode({ kind: 'main' });
+        return;
+      }
+      if (key.upArrow || input === 'k') {
+        setMode({ kind: 'clear', focus: Math.max(0, mode.focus - 1) });
+        return;
+      }
+      if (key.downArrow || input === 'j') {
+        setMode({
+          kind: 'clear',
+          focus: Math.min(CLEAR_OPTIONS.length - 1, mode.focus + 1),
+        });
+        return;
+      }
+      if (key.return) {
+        applyClear(CLEAR_OPTIONS[mode.focus]?.id ?? 'cancel');
+      }
       return;
     }
 
@@ -567,8 +644,8 @@ function AppInner({ path }: { path: string }): React.ReactElement {
       openInput('wait', note.wait);
       return;
     }
-    if (input === 'c') {
-      openInput('close', '');
+    if (input === 'f') {
+      openInput('finished', '');
       return;
     }
     if (input === 'v') {
@@ -583,6 +660,10 @@ function AppInner({ path }: { path: string }): React.ReactElement {
     if (input === ',') {
       const idx = packs.findIndex((p) => p.id === activePackId);
       setMode({ kind: 'settings', focus: idx >= 0 ? idx : 0 });
+      return;
+    }
+    if (input === 'c') {
+      setMode({ kind: 'clear', focus: 0 });
       return;
     }
 
@@ -604,6 +685,11 @@ function AppInner({ path }: { path: string }): React.ReactElement {
           ),
         };
         save(next);
+        return;
+      }
+      if (input === 'd' || key.backspace || key.delete) {
+        const i = Math.min(focusTodo, note.todo.length - 1);
+        save(removeTodo(note, i), 'removed');
       }
     }
   });
@@ -618,7 +704,7 @@ function AppInner({ path }: { path: string }): React.ReactElement {
   const threadLines = bodyLines(note.thread);
   const nowLines = bodyLines(note.now);
   const hasTodo = note.todo.length > 0;
-  const hasClosed = note.closed.length > 0;
+  const hasFinished = note.finished.length > 0;
 
   if (mode.kind === 'help') {
     return (
@@ -632,9 +718,11 @@ function AppInner({ path }: { path: string }): React.ReactElement {
             'v  add todo item',
             's  status picker',
             ',  settings (status pack)',
-            'c  close decision',
+            'f  finished (settled decision)',
             'j/k or arrows  move todo focus',
             'space / x  toggle todo item',
+            'd / backspace  remove focused todo',
+            'c  clear menu (todos / now+wait / everything)',
             'r  reload file',
             'i  init file (if missing)',
             'q  quit',
@@ -648,6 +736,70 @@ function AppInner({ path }: { path: string }): React.ReactElement {
             </Text>
           ))}
         </Box>
+      </Box>
+    );
+  }
+
+  if (mode.kind === 'clear-confirm') {
+    return (
+      <Box flexDirection="column" height={rows || 24} width={columns} justifyContent="center" alignItems="center">
+        <Box width={dialogW} flexDirection="column">
+          <Dialog
+            title="clear everything?"
+            actions={[
+              { key: 'enter', label: 'yes · clear', primary: true },
+              { key: 'esc', label: 'cancel' },
+            ]}
+            width={dialogW}
+          >
+            <Text color={tokens.fg} wrap="wrap">
+              Resets Now, Wait, Todo, Finished and status→idle.
+            </Text>
+            <Text color={tokens.fgDim} wrap="wrap">
+              Thread is kept ({note.thread.trim() || 'empty'}).
+            </Text>
+          </Dialog>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (mode.kind === 'clear') {
+    const clearChoices: ChoiceItem[] = CLEAR_OPTIONS.map((o) => ({
+      id: o.id,
+      label: o.label,
+      state: o.id === 'everything' ? 'warn' : o.id === 'cancel' ? 'pending' : 'ok',
+    }));
+    const focused = CLEAR_OPTIONS[mode.focus];
+    return (
+      <Box flexDirection="column" height={rows || 24} width={columns}>
+        <Header title="clear" subtitle="what to clear" right="esc back" />
+        <Box flexGrow={1} paddingX={1} paddingY={1} flexDirection="column">
+          <Pane title="clear" tone="focus" flexGrow={1}>
+            <Box flexDirection="column">
+              <ChoicePicker
+                choices={clearChoices}
+                focusedId={focused?.id}
+                height={Math.min(10, CLEAR_OPTIONS.length + 1)}
+              />
+              {focused ? (
+                <Box marginTop={1}>
+                  <Text color={tokens.fgDim} wrap="wrap">
+                    {focused.hint}
+                  </Text>
+                </Box>
+              ) : null}
+            </Box>
+          </Pane>
+        </Box>
+        <Footer
+          keys={[
+            { k: '↑↓', desc: 'move' },
+            { k: 'enter', desc: 'run' },
+            { k: 'esc', desc: 'back' },
+          ]}
+          right={flash ?? focused?.id}
+        />
       </Box>
     );
   }
@@ -844,12 +996,12 @@ function AppInner({ path }: { path: string }): React.ReactElement {
                 <TodoList items={note.todo} focusIndex={focusTodoIdx} />
               </Box>
             ) : null}
-            {hasClosed ? (
+            {hasFinished ? (
               <Box flexDirection="column" marginTop={1}>
-                <Text color={tokens.fgDim}>✓ closed</Text>
+                <Text color={tokens.fgDim}>✓ finished</Text>
                 <Box flexDirection="column" paddingLeft={2}>
-                  {note.closed.map((l, i) => (
-                    <Text key={`cl-${i}`} color={tokens.fgDim} wrap="wrap">
+                  {note.finished.map((l, i) => (
+                    <Text key={`fin-${i}`} color={tokens.fgDim} wrap="wrap">
                       • {l}
                     </Text>
                   ))}
@@ -860,15 +1012,19 @@ function AppInner({ path }: { path: string }): React.ReactElement {
         </Pane>
       </Box>
       <Footer
+        // blink Footer: 1 bar when it fits; 2nd bar on narrow terms before dropping.
+        maxRows={2}
         keys={[
-          // SCHEMA v0.1 keys — Footer drops chips from the right when narrow.
+          // Order = priority if still overflow past 2 rows.
           { k: 't', desc: 'thread' },
           { k: 'n', desc: 'now' },
-          ...(isBlocked ? ([{ k: 'w', desc: 'blocked on' }] as const) : []),
+          ...(isBlocked ? ([{ k: 'w', desc: 'wait' }] as const) : []),
           { k: 'v', desc: 'todo' },
           { k: 's', desc: 'status' },
           { k: 'sp', desc: 'toggle' },
-          { k: 'c', desc: 'close' },
+          { k: 'd', desc: 'del' },
+          { k: 'f', desc: 'finish' },
+          { k: 'c', desc: 'clear' },
           { k: ',', desc: 'pack' },
           { k: '?', desc: 'help' },
           { k: 'q', desc: 'quit' },

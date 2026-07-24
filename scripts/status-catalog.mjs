@@ -13,7 +13,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const root = join(here, '..');
+/** Directory that contains schemas/ when this script lives in scripts/. */
+const scriptRoot = join(here, '..');
 
 function readConfigValue(configFile, key) {
   if (!existsSync(configFile)) return undefined;
@@ -27,9 +28,27 @@ function readConfigValue(configFile, key) {
   return undefined;
 }
 
-function loadPackJson(id) {
-  const path = join(root, 'schemas/packs', `${id}.json`);
-  if (existsSync(path)) return { pack: JSON.parse(readFileSync(path, 'utf8')), path };
+/** Prefer MN_ROOT / config root= / MN_SHARE_DIR, then script-adjacent root. */
+function packSearchRoots(configFile) {
+  const roots = [];
+  const push = (p) => {
+    if (p && !roots.includes(p)) roots.push(p);
+  };
+  push(process.env.MN_ROOT?.trim());
+  push(readConfigValue(configFile, 'root'));
+  push(readConfigValue(configFile, 'MN_ROOT'));
+  push(process.env.MN_SHARE_DIR?.trim());
+  push(scriptRoot);
+  return roots;
+}
+
+function loadPackJson(id, configFile) {
+  for (const root of packSearchRoots(configFile)) {
+    const path = join(root, 'schemas/packs', `${id}.json`);
+    if (existsSync(path)) {
+      return { pack: JSON.parse(readFileSync(path, 'utf8')), path };
+    }
+  }
   return null;
 }
 
@@ -47,9 +66,11 @@ function deepMerge(base, over) {
 function loadCatalog() {
   const configDir = process.env.MN_CONFIG_DIR || join(homedir(), '.config/mn');
   const configFile = process.env.MN_CONFIG_FILE || join(configDir, 'config');
+  // pack= in config is sticky: installer + `mn status pack` both write it.
   const packId =
     process.env.MN_PACK?.trim() ||
     readConfigValue(configFile, 'pack') ||
+    readConfigValue(configFile, 'MN_PACK') ||
     'generic';
 
   let pack;
@@ -61,15 +82,34 @@ function loadCatalog() {
     pack = JSON.parse(readFileSync(pathOverride, 'utf8'));
     source = pathOverride;
   } else {
-    const loaded = loadPackJson(packId) || loadPackJson('generic');
+    const loaded = loadPackJson(packId, configFile) || loadPackJson('generic', configFile);
     if (!loaded) {
       pack = {
-        pack: 'generic',
-        order: ['idle', 'working', 'blocked', 'ready'],
-        aliases: {},
+        pack: packId === 'ai-dev' ? 'ai-dev' : 'generic',
+        order:
+          packId === 'ai-dev'
+            ? [
+                'idle',
+                'designing',
+                'await-design',
+                'planning',
+                'review-plan',
+                'coding',
+                'review-code',
+                'blocked',
+                'ready',
+              ]
+            : ['idle', 'working', 'blocked', 'ready'],
+        aliases: packId === 'ai-dev' ? { working: 'coding' } : {},
         statuses: {
           idle: { intent: 'ignore', glyph: '○', label: 'idle' },
           working: { intent: 'ignore', glyph: '◉', label: 'working' },
+          coding: { intent: 'ignore', glyph: '◉', label: 'coding' },
+          designing: { intent: 'ignore', glyph: '◈', label: 'designing' },
+          'await-design': { intent: 'act', glyph: '◇', label: 'await design' },
+          planning: { intent: 'ignore', glyph: '▤', label: 'planning' },
+          'review-plan': { intent: 'act', glyph: '▣', label: 'review plan' },
+          'review-code': { intent: 'act', glyph: '◐', label: 'review code' },
           blocked: {
             intent: 'act',
             glyph: '!',
@@ -80,7 +120,7 @@ function loadCatalog() {
           ready: { intent: 'act', glyph: '►', label: 'ready', badge: 'validate' },
         },
       };
-      source = 'builtin:generic';
+      source = `builtin:${pack.pack}`;
     } else {
       pack = loaded.pack;
       source = loaded.path;

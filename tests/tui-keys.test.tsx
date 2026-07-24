@@ -158,6 +158,96 @@ describe('TUI keys write the note file', () => {
     }
   });
 
+  it('f opens finished input and enter appends on disk', async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      await typeKeys(stdin, ['f'], 40);
+      await waitFor(() => /finished/i.test(lastFrame() ?? ''));
+      await typeKeys(stdin, 'decision-from-f'.split(''), 20);
+      await typeKeys(stdin, ['\r'], 40);
+      await waitFor(() =>
+        parseNote(readFileSync(path, 'utf8')).finished.includes('decision-from-f'),
+      );
+      expect(parseNote(readFileSync(path, 'utf8')).finished).toContain('decision-from-f');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('d removes the focused todo item on disk', async () => {
+    const { stdin, unmount } = render(<App />);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      // focus is alpha (index 0)
+      await typeKeys(stdin, ['d']);
+      await waitFor(() => {
+        const n = parseNote(readFileSync(path, 'utf8'));
+        return n.todo.length === 1 && n.todo[0]?.text === 'beta';
+      });
+      const n = parseNote(readFileSync(path, 'utf8'));
+      expect(n.todo.map((x) => x.text)).toEqual(['beta']);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('c → all todos clears the checklist on disk', async () => {
+    const { stdin, lastFrame, unmount } = render(<App />);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      // clear menu: 0 done, 1 all todos
+      await typeKeys(stdin, ['c'], 40);
+      await waitFor(() => /clear/i.test(lastFrame() ?? ''));
+      await typeKeys(stdin, ['j', '\r'], 35);
+      await waitFor(() => parseNote(readFileSync(path, 'utf8')).todo.length === 0);
+      expect(parseNote(readFileSync(path, 'utf8')).todo).toEqual([]);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('c → everything + confirm soft-resets but keeps thread', async () => {
+    // richer starting note
+    const w = writeTempNote(dir, {
+      thread: 'keep-me',
+      now: 'busy',
+      wait: 'someone',
+      status: 'coding',
+      todo: [
+        { text: 'alpha', done: true },
+        { text: 'beta', done: false },
+      ],
+      finished: ['old decision'],
+    });
+    process.env.MN_FILE = w.path;
+    path = w.path;
+
+    const { stdin, lastFrame, unmount } = render(<App />);
+    try {
+      await new Promise((r) => setTimeout(r, 60));
+      // clear: j×3 → everything (index 3), enter → confirm, enter
+      await typeKeys(stdin, ['c'], 40);
+      await waitFor(() => /clear/i.test(lastFrame() ?? ''));
+      await typeKeys(stdin, ['j', 'j', 'j', '\r'], 35);
+      await waitFor(() => /clear everything/i.test(lastFrame() ?? ''));
+      await typeKeys(stdin, ['\r'], 40);
+      await waitFor(() => {
+        const n = parseNote(readFileSync(path, 'utf8'));
+        return n.todo.length === 0 && n.status === 'idle' && n.now === '';
+      });
+      const n = parseNote(readFileSync(path, 'utf8'));
+      expect(n.thread).toBe('keep-me');
+      expect(n.status).toBe('idle');
+      expect(n.now).toBe('');
+      expect(n.wait).toBe('');
+      expect(n.todo).toEqual([]);
+      expect(n.finished).toEqual([]);
+    } finally {
+      unmount();
+    }
+  });
+
 });
 
 describe('TUI init when file is missing', () => {

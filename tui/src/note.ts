@@ -1,8 +1,8 @@
 /**
  * MICRONOTE.md parse / serialize — SCHEMA v0.1
  *
- * Canonical sections: Thread · Now · Wait · Todo · Closed
- * (Human + Description dropped; Validate/Need renamed → Todo)
+ * Canonical sections: Thread · Now · Wait · Todo · Finished
+ * (Human + Description dropped; Validate/Need → Todo; Closed → Finished)
  *
  * Wait = what is blocking (required when status requiresWait; cleared when unblocked).
  */
@@ -42,7 +42,8 @@ export interface MicroNote {
   wait: string;
   /** Human verify/decide checklist (SCHEMA: Todo). */
   todo: TodoItem[];
-  closed: string[];
+  /** Settled decisions (SCHEMA: Finished; legacy heading Closed). */
+  finished: string[];
 }
 
 export const PLACEHOLDER_TODO = '(nothing yet)';
@@ -73,7 +74,7 @@ export function emptyNote(): MicroNote {
     now: '',
     wait: '',
     todo: [],
-    closed: [],
+    finished: [],
   };
 }
 
@@ -94,8 +95,9 @@ function normalizeHeading(h: string): string | null {
     Need: 'Todo',
     Validate: 'Todo',
     Validar: 'Todo',
-    Closed: 'Closed',
-    Fechado: 'Closed',
+    Finished: 'Finished',
+    Closed: 'Finished', // legacy SCHEMA name
+    Fechado: 'Finished',
     // Dropped from SCHEMA v0.1 — parse then discard
     Description: null,
     Descricao: null,
@@ -115,7 +117,7 @@ export function parseNote(raw: string): MicroNote {
     Now: [],
     Wait: [],
     Todo: [],
-    Closed: [],
+    Finished: [],
   };
 
   for (const line of lines) {
@@ -174,13 +176,13 @@ export function parseNote(raw: string): MicroNote {
     }
   }
 
-  note.closed = [];
-  for (const line of bodies.Closed ?? []) {
+  note.finished = [];
+  for (const line of bodies.Finished ?? []) {
     const t = line.trim();
     if (!t || t === '-') continue;
     if (/^-\s*$/.test(t)) continue;
-    if (t.startsWith('- ')) note.closed.push(t.slice(2).trim());
-    else note.closed.push(t);
+    if (t.startsWith('- ')) note.finished.push(t.slice(2).trim());
+    else note.finished.push(t);
   }
 
   return note;
@@ -192,8 +194,8 @@ export function serializeNote(note: MicroNote): string {
       ? [`- [ ] ${PLACEHOLDER_TODO}`]
       : note.todo.map((v) => `- [${v.done ? 'x' : ' '}] ${v.text}`);
 
-  const closedLines =
-    note.closed.length === 0 ? ['- '] : note.closed.map((c) => `- ${c}`);
+  const finishedLines =
+    note.finished.length === 0 ? ['- '] : note.finished.map((c) => `- ${c}`);
 
   const block = (title: string, body: string) => {
     const b = body.trim();
@@ -203,7 +205,7 @@ export function serializeNote(note: MicroNote): string {
   // When status does not require wait, do not persist a stale reason.
   const waitBody = statusRequiresWait(String(note.status || 'idle')) ? note.wait : '';
 
-  // SCHEMA v0.1 template: Thread · Now · Wait · Todo · Closed
+  // SCHEMA v0.1 template: Thread · Now · Wait · Todo · Finished
   return [
     '# microNote',
     `updated: ${note.updated || nowHm()}`,
@@ -218,8 +220,8 @@ export function serializeNote(note: MicroNote): string {
     `## Todo`,
     ...todoLines,
     '',
-    `## Closed`,
-    ...closedLines,
+    `## Finished`,
+    ...finishedLines,
     '',
   ].join('\n');
 }
@@ -235,7 +237,7 @@ export function withStatus(note: MicroNote, status: string): MicroNote {
     ...note,
     status,
     todo: [...note.todo],
-    closed: [...note.closed],
+    finished: [...note.finished],
   };
   if (!statusRequiresWait(status)) next.wait = '';
   return next;
@@ -280,6 +282,62 @@ export function statusTitle(status: string): string {
 
 export function openTodoCount(note: MicroNote): number {
   return note.todo.filter((v) => !v.done).length;
+}
+
+/** Remove a single todo item by index. Out-of-range → unchanged note. */
+export function removeTodo(note: MicroNote, index: number): MicroNote {
+  if (index < 0 || index >= note.todo.length) {
+    return { ...note, todo: [...note.todo], finished: [...note.finished] };
+  }
+  return {
+    ...note,
+    todo: note.todo.filter((_, i) => i !== index),
+    finished: [...note.finished],
+  };
+}
+
+/** Drop checked items; keep open ones. */
+export function clearDoneTodos(note: MicroNote): MicroNote {
+  return {
+    ...note,
+    todo: note.todo.filter((t) => !t.done),
+    finished: [...note.finished],
+  };
+}
+
+/** Reset checklist to empty (disk writes the placeholder). */
+export function clearAllTodos(note: MicroNote): MicroNote {
+  return {
+    ...note,
+    todo: [],
+    finished: [...note.finished],
+  };
+}
+
+/** Clear Now + Wait (activity / block reason). */
+export function clearActivity(note: MicroNote): MicroNote {
+  return {
+    ...note,
+    now: '',
+    wait: '',
+    todo: [...note.todo],
+    finished: [...note.finished],
+  };
+}
+
+/**
+ * Soft reset: empty Now, Wait, Todo, Finished; status → idle.
+ * Preserves Thread (stream identity).
+ */
+export function clearSoft(note: MicroNote): MicroNote {
+  return {
+    ...note,
+    status: 'idle',
+    now: '',
+    wait: '',
+    todo: [],
+    finished: [],
+  };
 }
 
 /** @deprecated use openTodoCount */
