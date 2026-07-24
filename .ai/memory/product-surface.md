@@ -20,7 +20,8 @@
 ## Footer estreito
 
 - blink-tui `Footer` com `maxRows={2}`: 2 barras antes de dropar chips.
-- Chips: `t` `d` `n` `w`* `v` `s` `sp` `f` `c` `?` `q`.
+- Default `align="columns"`: em wrap, colunas alinhadas (pad por coluna) — ver blink-tui Footer.
+- Chips: `t` `d` `n` `w`* `v` `s` `sp` `f` `c` `,` `?` `q`.
 
 ## Install + pack
 
