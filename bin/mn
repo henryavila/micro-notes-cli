@@ -92,6 +92,30 @@ _load_status_catalog() {
 }
 _load_status_catalog
 
+# Shipped default pack (repo) and user override path.
+_statuses_default_file() {
+  local cand
+  for cand in \
+    "${MN_REPO_ROOT}/schemas/statuses.default.json" \
+    "${SHARE_DIR_DEFAULT}/schemas/statuses.default.json" \
+    "$MN_BIN_DIR/../schemas/statuses.default.json"
+  do
+    if [[ -f "$cand" ]]; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_statuses_user_file() {
+  if [[ -n "${MN_STATUSES:-}" && -n "${MN_STATUSES// }" ]]; then
+    printf '%s\n' "$MN_STATUSES"
+    return 0
+  fi
+  printf '%s\n' "$CONFIG_DIR/statuses.json"
+}
+
 # ── messages (English only) ─────────────────────────────────────────
 ACTIVE_LANG="en"
 MN_LANG_NAME="English"
@@ -529,18 +553,108 @@ cmd_wait() {
 cmd_status() {
   local val="${1:-}"
   local reason=""
-  # mn status --list | mn status list
-  if [[ "$val" == "--list" || "$val" == "list" || "$val" == "-l" ]]; then
-    local id g lab intent
-    while IFS= read -r id; do
-      [[ -z "$id" ]] && continue
-      g="$(_status_catalog glyph "$id")"
-      lab="$(_status_catalog label "$id")"
-      intent="$(_status_catalog intent "$id")"
-      printf '  %s %-14s  %s  [%s]\n' "$g" "$id" "$lab" "$intent"
-    done < <(_status_catalog list)
-    return 0
-  fi
+
+  # ── catalog management (no note write) ────────────────────────────
+  case "$val" in
+    --list|list|-l)
+      local id g lab intent
+      while IFS= read -r id; do
+        [[ -z "$id" ]] && continue
+        g="$(_status_catalog glyph "$id")"
+        lab="$(_status_catalog label "$id")"
+        intent="$(_status_catalog intent "$id")"
+        printf '  %s %-14s  %s  [%s]\n' "$g" "$id" "$lab" "$intent"
+      done < <(_status_catalog list)
+      return 0
+      ;;
+    --show|show|path|--path)
+      local src user def active
+      src="$(_status_catalog source 2>/dev/null | tr -d '\r' || true)"
+      user="$(_statuses_user_file)"
+      def="$(_statuses_default_file 2>/dev/null || true)"
+      printf 'pack source:  %s\n' "${src:-builtin/fallback}"
+      printf 'user file:    %s' "$user"
+      if [[ -f "$user" ]]; then
+        printf '  (exists — active override)\n'
+      else
+        printf '  (missing — using default)\n'
+      fi
+      printf 'default file: %s\n' "${def:-(not found)}"
+      printf '\nEffective statuses:\n'
+      cmd_status --list
+      return 0
+      ;;
+    --init|init)
+      local force=0 dest src
+      shift || true
+      [[ "${1:-}" == "--force" || "${1:-}" == "-f" ]] && force=1
+      dest="$(_statuses_user_file)"
+      # Never write into a random MN_STATUSES path without parent dir
+      mkdir -p "$(dirname "$dest")"
+      if [[ -f "$dest" && $force -eq 0 ]]; then
+        printf 'mn: already exists %s\n' "$dest" >&2
+        printf '    edit it, or: mn status init --force\n' >&2
+        printf '    active: mn status show\n' >&2
+        exit 1
+      fi
+      src="$(_statuses_default_file)" || {
+        printf 'mn: cannot find schemas/statuses.default.json\n' >&2
+        exit 1
+      }
+      cp "$src" "$dest"
+      printf 'mn: wrote %s\n' "$dest"
+      printf '    edit labels/order/statuses, then: mn status --list\n'
+      printf '    every status needs intent ignore|act; blocked should set requiresWait: true\n'
+      return 0
+      ;;
+    --edit|edit)
+      local dest
+      dest="$(_statuses_user_file)"
+      if [[ ! -f "$dest" ]]; then
+        printf 'mn: no user pack at %s\n' "$dest" >&2
+        printf '    run: mn status init\n' >&2
+        exit 1
+      fi
+      local ed="${EDITOR:-${VISUAL:-vi}}"
+      # shellcheck disable=SC2086
+      $ed "$dest"
+      printf 'mn: edited %s — verify with: mn status --list\n' "$dest"
+      return 0
+      ;;
+    --help|help)
+      cat <<'EOF'
+mn status — set card status, or manage the status catalog
+
+Set status on the card
+  mn status <id>
+  mn status blocked -- "what is blocking"
+  mn status working          # alias → coding
+
+Catalog
+  mn status --list           effective statuses (glyph · id · label · intent)
+  mn status show             which pack is active + paths
+  mn status init             copy default pack → ~/.config/mn/statuses.json
+  mn status init --force     overwrite user pack with default
+  mn status edit             open user pack in $EDITOR
+
+Override resolution (first hit wins)
+  1. $MN_STATUSES
+  2. statuses= in ~/.config/mn/config
+  3. ~/.config/mn/statuses.json
+  4. schemas/statuses.default.json (ai-dev pack)
+
+Custom pack tips
+  - Copy with init, then edit: order[], statuses{}, aliases{}
+  - Each status: intent (ignore|act), glyph (prefer width-1), label, optional badge
+  - requiresWait: true  → ## Wait required (like blocked)
+  - Partial override: only list statuses you patch; merge deep-merges by id
+  - If you set "order", it replaces the full picker order
+EOF
+      return 0
+      ;;
+  esac
+
+  # ── set status on the note ────────────────────────────────────────
   # mn status blocked -- "reason"  OR  mn status blocked "reason…"
   if [[ "$val" == "blocked" ]]; then
     shift || true
@@ -551,11 +665,11 @@ cmd_status() {
   else
     shift || true
   fi
-  [[ -n "$val" ]] || { printf '%s\n' "$MSG_USAGE_STATUS" >&2; exit 2; }
+  [[ -n "$val" ]] || { printf '%s\n' "$MSG_USAGE_STATUS" >&2; printf '    mn status help\n' >&2; exit 2; }
   if [[ "$(_status_catalog valid "$val")" != "1" ]]; then
     msg "$MSG_INVALID_STATE" "$val" >&2
     printf '    valid: %s\n' "$VALID_STATUSES" >&2
-    printf '    (mn status --list)\n' >&2
+    printf '    (mn status --list | mn status help)\n' >&2
     exit 2
   fi
   val="$(_status_catalog canon "$val" | tr -d '\r')"
@@ -998,6 +1112,10 @@ Write (quiet — one-line ok; use TUI or mn show for the card)
   mn validate <text>
   mn status <id>              set status (catalog: ai-dev pack)
   mn status --list            list statuses (glyph · id · label · intent)
+  mn status show              active pack + paths
+  mn status init [--force]    scaffold ~/.config/mn/statuses.json
+  mn status edit              open user pack in $EDITOR
+  mn status help              catalog + custom pack docs
   mn status blocked -- <reason>   set blocked + wait in one shot
   mn human [--replace] <text>
   mn close <text>
@@ -1010,7 +1128,8 @@ Statuses (default pack: ai-dev)
   idle  designing  await-design  planning  review-plan
   coding  review-code  blocked  ready
   (alias: working → coding)
-  override: ~/.config/mn/statuses.json  or  MN_STATUSES=path
+  customize:  mn status init   →  edit  →  mn status --list
+  override:   ~/.config/mn/statuses.json  or  MN_STATUSES=path
 
 Shortcuts
   t→thread  d→description  n→now  w→wait  v→validate  s→status  h→human  c→close

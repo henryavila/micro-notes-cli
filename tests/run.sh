@@ -136,6 +136,23 @@ printf '%s\n' "$list_out" | grep -q review-plan || fail "status --list missing r
 printf '%s\n' "$list_out" | grep -q review-code || fail "status --list missing review-code"
 pass "ai-dev status pack"
 
+# status init scaffolds user pack (isolated config dir)
+export MN_CONFIG_DIR="$ROOT/cfg-status"
+rm -rf "$MN_CONFIG_DIR"
+mkdir -p "$MN_CONFIG_DIR"
+"$MN" status init >/dev/null || fail "status init"
+[[ -f "$MN_CONFIG_DIR/statuses.json" ]] || fail "statuses.json not created"
+grep -q review-plan "$MN_CONFIG_DIR/statuses.json" || fail "init copy missing review-plan"
+show_out="$("$MN" status show)"
+printf '%s\n' "$show_out" | grep -q "statuses.json" || fail "status show missing user file"
+printf '%s\n' "$show_out" | grep -q "exists" || fail "status show should mark override exists"
+if "$MN" status init >/dev/null 2>&1; then
+  fail "status init without --force should fail when file exists"
+fi
+"$MN" status init --force >/dev/null || fail "status init --force"
+pass "status init / show"
+unset MN_CONFIG_DIR
+
 # ready + placeholder must NOT show "N to validate"
 "$MN" clear-validate >/dev/null
 "$MN" status ready >/dev/null
