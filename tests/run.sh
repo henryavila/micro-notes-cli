@@ -8,94 +8,77 @@ trap 'rm -rf "$TMP"' EXIT
 export MN_FILE="$TMP/MICRONOTE.md"
 export MN_COLOR=0
 export MN_ASCII=1
-export MN_LOCALES_DIR="$ROOT/locales"
 export MN_CONFIG_FILE="$TMP/mn-config"
 export MN_CONFIG_DIR="$TMP"
-# default tests in pt-BR
-export MN_LANG=pt-BR
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { printf 'ok  %s\n' "$*"; }
 
-# ── i18n: missing file message (pt-BR) ──────────────────────────────
+# missing file message (English)
 out="$("$MN" show 2>&1 || true)"
-printf '%s\n' "$out" | grep -q 'rode mn init' || fail "pt-BR missing file should say 'rode mn init' (got: $out)"
-printf '%s\n' "$out" | grep -q 'corre ' && fail "should not use pt-PT 'corre'"
-pass "i18n pt-BR no-file message"
+printf '%s\n' "$out" | grep -q 'run mn init' || fail "missing file should say 'run mn init' (got: $out)"
+pass "en no-file message"
 
-# ── i18n: English ───────────────────────────────────────────────────
-out="$(MN_LANG=en "$MN" show 2>&1 || true)"
-printf '%s\n' "$out" | grep -q 'run mn init' || fail "en missing file should say 'run mn init' (got: $out)"
-pass "i18n en no-file message"
-
-# ── i18n: lang command ──────────────────────────────────────────────
+# lang stub
 lang_out="$("$MN" lang)"
-printf '%s\n' "$lang_out" | grep -q 'pt-BR' || fail "lang should report pt-BR"
+printf '%s\n' "$lang_out" | grep -q 'en' || fail "lang should report en"
 pass "lang inspect"
-
-MN_LANG= "$MN" lang en >/dev/null
-# config written; unset MN_LANG to use config
-cfg_lang="$(grep '^lang=' "$MN_CONFIG_FILE" | head -1)"
-[[ "$cfg_lang" == "lang=en" ]] || fail "config should be lang=en (got $cfg_lang)"
-out="$(MN_LANG= "$MN" show 2>&1 || true)"
-printf '%s\n' "$out" | grep -q 'run mn init' || fail "config en should apply to show"
-# restore pt-BR for rest of suite
-MN_LANG= "$MN" lang pt-BR >/dev/null
-export MN_LANG=pt-BR
-pass "lang set via config"
 
 # init
 "$MN" init >/dev/null
 [[ -f "$MN_FILE" ]] || fail "init did not create file"
+grep -q '^updated:' "$MN_FILE" || fail "init missing updated:"
+grep -q '^status:' "$MN_FILE" || fail "init missing status:"
+grep -qx '## Thread' "$MN_FILE" || fail "init missing ## Thread"
+grep -qx '## Description' "$MN_FILE" || fail "init missing ## Description"
 pass "init"
 
 # show without crash
 "$MN" show >/dev/null
 pass "show empty-ish"
 
-# check should fail (fio empty)
+# check should fail (thread empty)
 if "$MN" check >/dev/null 2>&1; then
-  fail "check should fail with empty fio"
+  fail "check should fail with empty thread"
 fi
-pass "check fails empty fio"
+pass "check fails empty thread"
 
-# write fields
-"$MN" fio "webhooks paddle" >/dev/null
-"$MN" agora "a escrever testes" >/dev/null
-"$MN" validar "npm test -- webhook" >/dev/null
-"$MN" validar "retry nao duplica" >/dev/null
-"$MN" estado ready >/dev/null
-"$MN" humano "nao tocar billing" >/dev/null
-"$MN" fechar "descartamos Stripe" >/dev/null
+# write fields (quiet one-line ok)
+out="$("$MN" thread "webhooks paddle")"
+printf '%s\n' "$out" | grep -q 'ok · thread' || fail "thread should be quiet ok (got: $out)"
+"$MN" description "long context about paddle webhooks and why idempotency matters" >/dev/null
+"$MN" now "writing tests" >/dev/null
+"$MN" validate "npm test -- webhook" >/dev/null
+"$MN" validate "retry does not duplicate" >/dev/null
+"$MN" status ready >/dev/null
+"$MN" human "do not touch billing" >/dev/null
+"$MN" close "dropped Stripe" >/dev/null
 
 "$MN" check >/dev/null || fail "check should pass after fill"
-pass "check after fill"
+pass "check after fill + quiet writes"
 
 out="$("$MN" show)"
-printf '%s\n' "$out" | grep -q "webhooks paddle" || fail "show missing fio"
-printf '%s\n' "$out" | grep -q "npm test" || fail "show missing validar"
-printf '%s\n' "$out" | grep -q "ready" || fail "show missing estado"
-printf '%s\n' "$out" | grep -q "por validar" || fail "pt-BR badge missing"
+printf '%s\n' "$out" | grep -q "webhooks paddle" || fail "show missing thread"
+printf '%s\n' "$out" | grep -q "long context about paddle" || fail "show missing description"
+printf '%s\n' "$out" | grep -q "npm test" || fail "show missing validate"
+printf '%s\n' "$out" | grep -q "ready" || fail "show missing status"
+printf '%s\n' "$out" | grep -q "to validate" || fail "en badge missing"
 pass "show content"
 
-# English aliases
-export MN_LANG=en
-"$MN" thread "english thread" >/dev/null
-grep -A2 '## Fio' "$MN_FILE" | grep -q 'english thread' || fail "en alias thread"
-out="$("$MN" show)"
-printf '%s\n' "$out" | grep -q "to validate" || fail "en badge missing"
-export MN_LANG=pt-BR
-pass "en aliases + badge"
+# description append
+"$MN" description --append "second paragraph" >/dev/null
+grep -A5 '## Description' "$MN_FILE" | grep -q 'second paragraph' || fail "description --append"
+pass "description --append"
 
-# feito first open
-"$MN" feito >/dev/null
-grep -q '\- \[x\] npm test' "$MN_FILE" || fail "feito did not mark first item"
-pass "feito"
+# done first open
+"$MN" done >/dev/null
+grep -q '\- \[x\] npm test' "$MN_FILE" || fail "done did not mark first item"
+pass "done"
 
-# limpar-validar
-"$MN" limpar-validar >/dev/null
-grep -q '(nada ainda)' "$MN_FILE" || fail "limpar-validar"
-pass "limpar-validar"
+# clear-validate
+"$MN" clear-validate >/dev/null
+grep -q '(nothing yet)' "$MN_FILE" || fail "clear-validate"
+pass "clear-validate"
 
 # path
 p="$("$MN" path)"
@@ -103,29 +86,89 @@ p="$("$MN" path)"
 pass "path"
 
 # shortcuts
-"$MN" f "novo fio" >/dev/null
-grep -A2 '## Fio' "$MN_FILE" | grep -q 'novo fio' || fail "shortcut f"
-pass "shortcut f"
+"$MN" t "new thread" >/dev/null
+grep -A2 '## Thread' "$MN_FILE" | grep -q 'new thread' || fail "shortcut t"
+"$MN" d "new desc" >/dev/null
+grep -A2 '## Description' "$MN_FILE" | grep -q 'new desc' || fail "shortcut d"
+"$MN" n "now text" >/dev/null
+grep -A2 '## Now' "$MN_FILE" | grep -q 'now text' || fail "shortcut n"
+pass "shortcuts t/d/n"
 
 # version
 ver="$("$MN" --version)"
 [[ -n "$ver" ]] || fail "version empty"
 pass "version $ver"
 
-# replace humano
-"$MN" humano --replace "so isto" >/dev/null
-body="$(awk '/^## Humano$/{p=1;next} /^## /{p=0} p' "$MN_FILE")"
-printf '%s\n' "$body" | grep -q 'so isto' || fail "humano replace"
-if printf '%s\n' "$body" | grep -q 'nao tocar'; then
-  fail "humano replace kept old"
+# human --replace
+"$MN" human --replace "only this" >/dev/null
+body="$(awk '/^## Human$/{p=1;next} /^## /{p=0} p' "$MN_FILE")"
+printf '%s\n' "$body" | grep -q 'only this' || fail "human replace"
+if printf '%s\n' "$body" | grep -q 'do not touch'; then
+  fail "human replace kept old"
 fi
-pass "humano --replace"
+pass "human --replace"
 
-# blocked badge pt-BR
-"$MN" estado blocked >/dev/null
+# blocked badge
+"$MN" status blocked >/dev/null
 out="$("$MN" show)"
-printf '%s\n' "$out" | grep -q "precisa de você" || fail "blocked badge should be pt-BR 'você' not 'ti'"
-printf '%s\n' "$out" | grep -q "precisa de ti" && fail "should not use pt-PT 'ti'"
-pass "blocked badge pt-BR"
+printf '%s\n' "$out" | grep -q "needs you" || fail "blocked badge"
+pass "blocked badge"
+
+# ready + placeholder must NOT show "N to validate"
+"$MN" clear-validate >/dev/null
+"$MN" status ready >/dev/null
+out="$("$MN" show)"
+if printf '%s\n' "$out" | grep -qE '[0-9]+ to validate'; then
+  fail "placeholder must not count as open validate (got: $out)"
+fi
+pass "ready+placeholder no to-validate badge"
+
+# invalid status exit code
+if "$MN" status foobar >/dev/null 2>&1; then
+  fail "invalid status should exit non-zero"
+fi
+pass "invalid status exit"
+
+# unknown command exit
+if "$MN" totally-unknown-xyz >/dev/null 2>&1; then
+  fail "unknown command should exit non-zero"
+fi
+pass "unknown command exit"
+
+# bare mn with MN_UI=0 is card path
+export MN_UI=0
+out="$("$MN")"
+printf '%s\n' "$out" | grep -q "new thread\|webhooks\|ready\|blocked\|working\|idle" || fail "bare mn MN_UI=0 card"
+unset MN_UI
+pass "bare mn MN_UI=0"
+
+# migrate legacy PT file
+LEGACY="$TMP/legacy.md"
+cat >"$LEGACY" <<'EOF'
+# microNote
+atualizado: 10:00
+estado: working
+
+## Fio
+old thread
+
+## Agora
+old now
+
+## Validar
+- [ ] (nada ainda)
+
+## Humano
+
+## Fechado
+- 
+EOF
+MN_FILE="$LEGACY" "$MN" show >/dev/null
+grep -q '^updated:' "$LEGACY" || fail "migrate updated"
+grep -q '^status:' "$LEGACY" || fail "migrate status"
+grep -qx '## Thread' "$LEGACY" || fail "migrate Thread"
+grep -qx '## Description' "$LEGACY" || fail "migrate Description"
+grep -A2 '## Thread' "$LEGACY" | grep -q 'old thread' || fail "migrate kept body"
+pass "migrate PT → EN schema"
 
 printf '\nall tests passed\n'

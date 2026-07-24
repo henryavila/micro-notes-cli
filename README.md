@@ -1,170 +1,159 @@
 # micro-notes-cli
 
-CLI de **microNote** no terminal — card de reentrada humana ao trabalhar com vários agentes (Herdr, multi-worktree, multi-app).
+**microNote** — human re-entry card for multi-agent work (Herdr, multi-worktree).
 
-```text
-  ▶ ready · 14:32 · wt-auth/MICRONOTE.md
-  2 por validar
+- **CLI** (`bin/mn`) — agents & scripts: quiet writes, `check`, one-shot `show`
+- **TUI** (`mn` / `mn ui`) — blink + Ink live card (no terminal pollution)
 
-  💬 Fio
-     webhooks Paddle — idempotency
-  → Agora
-     à espera de review
-  ☐ Validar
-     ☐  npm test -- webhook
-     ☐  retry não duplica
-  ✎ Humano
-     não tocar em billing UI
-  ✓ Fechado
-     • descartámos Stripe
-```
+Language: **English only** for now (file format + commands + UI). pt-BR later.
 
 ## Install
 
 ```bash
-cd /Volumes/External/code/micro-notes-cli   # ou o path do repo
-./install.sh
+cd /path/to/micro-notes-cli
+./install.sh --link          # symlink bin/mn (dev)
+npm install                  # TUI deps (blink-tui, ink, react)
 ```
 
-No install, o idioma da UI é escolhido interativamente (**pt-BR** ou **en**).  
-Não-interativo:
-
-```bash
-./install.sh --lang pt-BR
-./install.sh --lang en
-# ou: MN_LANG=en ./install.sh
-```
-
-O que o installer faz:
-
-1. Pergunta (ou recebe) o idioma e grava em `~/.config/mn/config`
-2. Copia `locales/` → `~/.local/share/mn/locales/`
-3. Copia `bin/mn` → `~/.local/bin/mn` (ou symlink com `--link`)
-4. Se `~/.local/bin` **não** estiver no PATH, acrescenta um bloco marcado no shell rc (`.zshrc` / `.bashrc` / fish)
-5. Verifica `mn --version`
-
-```bash
-# opções
-./install.sh                 # copy + PATH se preciso + prompt de idioma
-./install.sh --lang pt-BR    # sem prompt
-./install.sh --link          # symlink → repo (dev: git pull atualiza)
-./install.sh --alias-only    # só alias no rc → path do repo (sem ~/.local/bin)
-./install.sh --prefix DIR    # outro destino
-./install.sh --force-rc      # reescreve o bloco no shell rc
-./install.sh --dry-run
-./install.sh --uninstall     # ou: ./uninstall.sh
-```
-
-Depois de instalar (se o PATH foi alterado):
-
-```bash
-source ~/.zshrc    # ou abre um terminal novo
-mn --version
-mn ajuda           # ou: mn help
-mn lang            # idioma ativo
-```
+Requires **Node ≥ 18** for the TUI. CLI bash works without Node.
 
 ## Quickstart
 
 ```bash
-cd /path/to/worktree   # page Herdr
+cd /path/to/worktree
 mn init
-mn fio "webhooks Paddle — idempotency"
-mn agora "a escrever testes"
-mn validar "npm test -- webhook"
-mn estado ready
-mn                       # ver card
+mn thread "webhooks Paddle — idempotency"
+mn description "long context so re-entry makes sense…"
+mn now "writing tests"
+mn validate "npm test -- webhook"
+mn status ready
+
+mn              # TTY → blink TUI
+mn show         # one-shot card (no TUI)
+mn ui           # force TUI
 ```
 
-Pane lateral no Herdr:
+Writes print one line only:
 
-```bash
-mn watch
+```text
+ok · thread · webhooks Paddle — idempotency
 ```
 
-Sem decorar comandos:
+The TUI (or `mn show` / side pane) owns the full card.
 
-```bash
-mn +
+## TUI keys
+
+| Key | Action |
+|-----|--------|
+| `t` | edit thread (short label) |
+| `d` | edit description (long context) |
+| `n` | edit now |
+| `v` | add validate item |
+| `s` | status picker |
+| `h` | human note |
+| `c` | close decision |
+| `j`/`k` or arrows | move validate focus |
+| `space` / `x` | toggle validate item |
+| `r` | reload file |
+| `i` | init file if missing |
+| `?` | help |
+| `q` | quit |
+
+External `mn thread …` / agent writes update the file; the TUI **reloads** via `fs.watch`.
+
+## File format (`MICRONOTE.md`)
+
+```markdown
+# microNote
+updated: HH:MM
+status: idle|working|blocked|ready
+
+## Thread
+short label
+
+## Description
+long re-entry context
+
+## Now
+what is happening
+
+## Validate
+- [ ] (nothing yet)
+
+## Human
+
+## Closed
+-
 ```
 
-## Ficheiro
+Legacy PT files (`## Fio`, `atualizado:`, …) migrate automatically.
 
-- **`MICRONOTE.md`** na raiz do cwd (worktree)
-- Override: `MN_FILE=/path/to/file.md`
-- **Não** usamos `STATUS.md` (colide com outras ferramentas)
+| Section | Role |
+|---------|------|
+| **Thread** | Short label |
+| **Description** | Long background for re-entry |
+| **Now** | Current activity |
+| **Validate** | Human checklist |
+| **Human** | Human-only notes |
+| **Closed** | Settled decisions |
 
-## Comandos
+## Commands
 
-| Comando | Efeito |
+| Command | Effect |
 |---------|--------|
-| `mn` / `mn show` | card com cores + símbolos |
-| `mn watch [n]` | refresh a cada n s (default 1) |
-| `mn init` | cria `MICRONOTE.md` |
-| `mn fio "…"` | secção Fio |
-| `mn agora "…"` | secção Agora |
-| `mn validar "…"` | checkbox em Validar |
-| `mn estado idle\|working\|blocked\|ready` | estado |
-| `mn humano [--replace] "…"` | nota humana |
-| `mn fechar "…"` | decisão fechada |
-| `mn feito [n\|texto]` | marca validar como feito |
-| `mn limpar-validar` | placeholder em Validar |
-| `mn check` | estrutura ok? (exit 0/1) |
-| `mn path` | path do arquivo |
-| `mn +` | menu (fzf ou select) |
-| `mn ajuda` / `mn help` | ajuda |
-| `mn lang [pt-BR\|en]` | ver / definir idioma da UI |
+| `mn` | TUI on TTY; else one-shot card |
+| `mn ui` | blink TUI |
+| `mn show` | one-shot card |
+| `mn watch [n]` | full-screen refresh loop |
+| `mn init` | create file |
+| `mn thread "…"` | set thread (quiet) |
+| `mn description [--append] "…"` | set/append description |
+| `mn now "…"` | set now |
+| `mn validate "…"` | add checklist item |
+| `mn status idle\|working\|blocked\|ready` | set status |
+| `mn human [--replace] "…"` | human note |
+| `mn close "…"` | closed decision |
+| `mn done [n\|text]` | mark validate done |
+| `mn clear-validate` | reset checklist |
+| `mn check` | structure gate (exit 0/1) |
+| `mn path` | print path |
+| `mn +` | menu |
+| `mn help` | help |
 
-Atalhos: `f` fio · `a` agora · `v` validar · `e` estado · `h` humano · `x` fechar
-
-Aliases EN: `thread` `now` `validate` `status` `human` `close` `done` `clear-validate`
-
-## Idioma (UI)
-
-| Prioridade | Fonte |
-|------------|--------|
-| 1 | `MN_LANG=pt-BR` ou `MN_LANG=en` |
-| 2 | `~/.config/mn/config` (`lang=…`, definido no install) |
-| 3 | `LANG` / `LC_ALL` do sistema |
-| 4 | **pt-BR** (padrão) |
-
-O formato do arquivo `MICRONOTE.md` (headings `## Fio`, etc.) é estável — só a UI muda de idioma.
-
-```bash
-mn lang en      # grava no config
-mn lang pt-BR
-MN_LANG=en mn   # override pontual
-```
+**Shortcuts:** `t` `d` `n` `v` `s` `h` `c`
 
 ## Env
 
-| Var | Efeito |
+| Var | Effect |
 |-----|--------|
-| `MN_FILE` | path do card |
-| `MN_LANG` | `pt-BR` \| `en` (override do config) |
-| `MN_COLOR=0` / `NO_COLOR` | sem cor |
-| `MN_ASCII=1` | símbolos ASCII |
-| `MN_WATCH_INTERVAL` | segundos no watch |
+| `MN_FILE` | card path |
+| `MN_UI=0` | bare `mn` uses one-shot card (no TUI) |
+| `MN_COLOR=0` / `NO_COLOR` | no color (CLI card) |
+| `MN_ASCII=1` | ASCII symbols (CLI) |
+| `MN_WATCH_INTERVAL` | `mn watch` seconds |
 
-## Estados (header)
+## Architecture
 
-| estado | símbolo | significado |
-|--------|---------|-------------|
-| idle | ○ | nada a fazer |
-| working | ◉ | agent a trabalhar |
-| blocked | ⛔ | precisa de ti |
-| ready | ▶ | validar agora |
+```text
+MICRONOTE.md
+    ↑ write (atomic)
+    │
+    ├─ bin/mn          bash CLI (agents, gates, quiet writes)
+    └─ tui/            Node + @henryavila/blink-tui + ink
+         note.ts       parse/serialize (shared format)
+         App.tsx       live card + keys + fs.watch
+```
 
 ## Tests
 
 ```bash
-bash tests/run.sh
+bash tests/run.sh    # CLI smoke
+npm test             # note.ts unit tests
 ```
 
-## Design
+## Dev
 
-Ver [PLAN.md](./PLAN.md).
-
-## License
-
-MIT
+```bash
+npm run tui          # tsx tui/src/index.tsx
+npm run build:tui    # optional bundle → tui/dist
+```

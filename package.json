@@ -1,0 +1,37 @@
+{
+  "name": "micro-notes-cli",
+  "version": "0.4.0",
+  "private": true,
+  "description": "microNote CLI + blink TUI — human re-entry card",
+  "type": "module",
+  "bin": {
+    "mn-ui": "./tui/bin/mn-ui.mjs"
+  },
+  "scripts": {
+    "tui": "tsx tui/src/index.tsx",
+    "build:tui": "tsup tui/src/index.tsx --format esm --outDir tui/dist --clean --sourcemap",
+    "test": "vitest run && bash tests/run.sh",
+    "test:unit": "vitest run",
+    "test:bash": "bash tests/run.sh",
+    "test:e2e": "vitest run tests/e2e",
+    "typecheck": "tsc -p tui/tsconfig.json --noEmit",
+    "postinstall": "node scripts/check-react-singleton.mjs"
+  },
+  "dependencies": {
+    "@henryavila/blink-tui": "file:../blink-tui",
+    "ink": "^5.1.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "@types/react": "^18.3.12",
+    "ink-testing-library": "^4.0.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,18 +1,21 @@
 # microNote
-atualizado: 
-estado: idle
+updated: 
+status: idle
 
-## Fio
-
-
-## Agora
+## Thread
 
 
-## Validar
-- [ ] (nada ainda)
-
-## Humano
+## Description
 
 
-## Fechado
+## Now
+
+
+## Validate
+- [ ] (nothing yet)
+
+## Human
+
+
+## Closed
 - 

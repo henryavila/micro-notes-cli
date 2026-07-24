@@ -1,7 +1,5 @@
+node_modules/
+tui/dist/
+*.log
 .DS_Store
-*.bak
-*.tmp
-.idea/
-.vscode/
-*.swp
-*~
+coverage/
